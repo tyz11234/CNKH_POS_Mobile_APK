@@ -15,4 +15,8 @@ Desktop POS source remains at: https://github.com/tyz11234/-CNKH_POS_V5
 
 ## Version
 
+Latest companion APK: **v1.4.0+14** (continuous scan, categories, images, BT printer, barcode export/queue).
+
+## Version
+
 Companion build aligned with CNKH Hardware POS V5 (`5.0.0-alpha.4` era).
