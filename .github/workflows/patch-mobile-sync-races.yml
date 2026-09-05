@@ -1,0 +1,54 @@
+name: Patch Mobile Sync Races
+
+on:
+  push:
+    branches:
+      - fix/lan-sync-consistency
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/lan-sync-consistency
+          fetch-depth: 0
+      - name: Patch sync race edges
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path('lib/services/lan_sync.dart')
+          text = p.read_text(encoding='utf-8')
+
+          old = """          final deleted = (m['is_deleted'] as num?)?.toInt() ?? 0;\n          if (existing.isNotEmpty &&\n              (m['sold_at'] == null || m['sold_at'].toString().isEmpty)) {\n            await txn.update(\n              'sales',\n              {\n                'voided': deleted == 0 ? 1 : deleted,\n                'void_note': m['void_note']?.toString() ?? 'remote deleted',\n                'synced_at': DateTime.now().toIso8601String(),\n              },\n              where: 'id=?',\n              whereArgs: [existing.first['id']],\n            );\n            changed++;\n            continue;\n          }\n"""
+          new = """          final deleted = (m['is_deleted'] as num?)?.toInt() ?? 0;\n          final isTombstone =\n              m['sold_at'] == null || m['sold_at'].toString().isEmpty;\n          if (isTombstone) {\n            if (existing.isNotEmpty) {\n              await txn.update(\n                'sales',\n                {\n                  'voided': deleted == 0 ? 1 : deleted,\n                  'void_note': m['void_note']?.toString() ?? 'remote deleted',\n                  'synced_at': DateTime.now().toIso8601String(),\n                },\n                where: 'id=?',\n                whereArgs: [existing.first['id']],\n              );\n              changed++;\n            }\n            continue;\n          }\n"""
+          if old in text:
+              text = text.replace(old, new, 1)
+
+          old2 = """          final id = m['id'] as String;\n          final canonicalReceipt = mappedById[id];\n          await txn.update(\n            'sales',\n"""
+          new2 = """          final id = m['id'] as String;\n          final canonicalReceipt = mappedById[id];\n          if (canonicalReceipt != null &&\n              canonicalReceipt != m['receipt_no']?.toString()) {\n            // A WebSocket/poll may have already pulled the same server sale\n            // under its canonical receipt while this push was in flight.\n            // Remove that synced duplicate before renaming the local outbox row.\n            await txn.delete(\n              'sales',\n              where: 'receipt_no=? AND id<>?',\n              whereArgs: [canonicalReceipt, id],\n            );\n          }\n          await txn.update(\n            'sales',\n"""
+          if old2 in text:
+              text = text.replace(old2, new2, 1)
+
+          old3 = """      if (t == 'sale') {\n        await _onSaleEvent();\n      } else if (t == 'catalog' ||\n"""
+          new3 = """      if (t == 'reconcile') {\n        final c = _cfg;\n        if (c != null) {\n          await client.forceReconcile(c);\n          connected = true;\n          onRemoteChange?.call();\n          await _emitStatus();\n        }\n      } else if (t == 'sale') {\n        await _onSaleEvent();\n      } else if (t == 'catalog' ||\n"""
+          if old3 in text:
+              text = text.replace(old3, new3, 1)
+
+          p.write_text(text, encoding='utf-8')
+      - name: Commit patches
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo "No changes"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add lib/services/lan_sync.dart
+          git commit -m "fix: close Mobile sync race edges"
+          git push origin HEAD:fix/lan-sync-consistency
