@@ -404,15 +404,41 @@ CREATE TABLE IF NOT EXISTS barcode_print_queue (
     await _seed(d);
   }
 
+  Future<String> _mobileDeviceCode(Database d) async {
+    final rows = await d.query(
+      'settings',
+      columns: ['value'],
+      where: 'key=?',
+      whereArgs: ['mobile_device_code'],
+      limit: 1,
+    );
+    final existing = rows.isEmpty ? '' : (rows.first['value'] as String? ?? '');
+    if (existing.length >= 4) return existing;
+
+    final code = const Uuid()
+        .v4()
+        .replaceAll('-', '')
+        .substring(0, 4)
+        .toUpperCase();
+    await d.insert(
+      'settings',
+      {'key': 'mobile_device_code', 'value': code},
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+    return code;
+  }
+
   Future<String> nextReceiptNo() async {
     final d = await db;
     final day = DateTime.now().toIso8601String().substring(0, 10).replaceAll('-', '');
+    final device = await _mobileDeviceCode(d);
+    final prefix = 'P$day-$device-';
     final rows = await d.rawQuery(
       "SELECT COUNT(*) AS c FROM sales WHERE receipt_no LIKE ?",
-      ['M$day%'],
+      ['$prefix%'],
     );
     final c = (rows.first['c'] as int? ?? 0) + 1;
-    return 'M$day-${c.toString().padLeft(4, '0')}';
+    return '$prefix${c.toString().padLeft(4, '0')}';
   }
 
   Future<String> nextHoldNo() async {
