@@ -1,93 +1,74 @@
-# 黄金发宝号 · 手机收银助手（Android APK）
+# 黄金发宝号 · CNKH POS Mobile
 
-Flutter 手机端，配合桌面 **[CNKH Hardware POS V5](https://github.com/tyz11234/-CNKH_POS_V5)** 使用。  
-登录页 / 顶栏店名：**黄金发宝号** · 工程包名仍为 `cnkh_pos_mobile`。
+Android Flutter 手机收银端，配合本账号的 **CNKH_POS_Desktop** 使用。两端通过局域网直接同步，不需要云服务器。
 
-**当前版本：1.4.1**（店名更新）· 上一功能包 1.4.0（连续扫码 / 分类 / 商品图 / BT 等）
+## 当前源码线
 
----
+- 源码版本：`1.8.0+22`
+- LAN 协议：`cnkh-sync:v1`
+- Desktop：`https://github.com/tyz11234/CNKH_POS_Desktop`
+- 本仓 Releases：`https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases`
 
-## 下载安装（Android）
+> GitHub Release 中已经发布的 APK 版本可能低于当前源码版本。只有在对应 Release 实际发布后，才把该源码版本视为正式发布 APK。
 
-1. 打开 [Releases](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases)
-2. 下最新 `CNKH_POS_Mobile.apk`（或带版本号的同名文件）
-3. 手机允许「未知来源」安装 → 打开 App
-4. 用 **Admin / Staff** 账号登录（演示账号见设置或店内约定）
-5. **设置**里导入 DuitNow 收款码（仅 Admin 可改；Staff 只读）
+## 局域网配对
 
-> 本仓发布 **APK**；源码与桌面端在 [‑CNKH_POS_V5](https://github.com/tyz11234/-CNKH_POS_V5)。iOS 需 Mac + Apple 签名，Linux 无法直接出可装 IPA。
+1. 手机和电脑连接同一个 Wi-Fi / LAN。
+2. Desktop 打开后会作为局域网主机监听默认端口 `8787`。
+3. Desktop 顶栏点击「扫码配对 / LAN pair」，电脑显示配对二维码。
+4. Mobile 顶栏点击扫码配对，用手机扫描电脑二维码。
+5. Mobile 保存主机地址和 Token，之后会自动重连并进行 HTTP 对账。
 
----
-
-## 和电脑一起用（局域网，无云）
-
-| 步骤 | 做什么 |
-|------|--------|
-| 1 | 手机与 PC **同一 Wi‑Fi** |
-| 2 | PC 顶栏 **同步/配对**，开服务（默认端口 **8787**） |
-| 3 | 手机顶栏 **扫码配对**，扫 PC 二维码 |
-| 4 | 看连接状态点；结账后销售应近实时互见 |
-
-扫不了时可在 **设置 → LAN Sync → 高级** 手填 `http://电脑IP:8787` 与 Token。
-
-配对码格式：
+二维码格式：
 
 ```text
 cnkh-sync:v1|{"baseUrl":"http://192.168.x.x:8787","token":"...","name":"CNKH-PC"}
 ```
 
----
+## 同步模型
 
-## 手机端功能一览
+Desktop 是店内局域网的权威主机。Mobile 可以离线开单；恢复连接后会把待同步销售推送回 Desktop，再从 Desktop 拉取权威商品、库存、客户、分类和销售数据。
 
-| 模块 | 说明 |
-|------|------|
-| 收银 POS | 搜索 / 分类芯片过滤、连续摄像头扫码、挂单超时提醒 |
-| 结账 | 现金 / 卡 / DuitNow / 赊账、找零、折扣审计 |
-| 电子收据 | 生成 PDF，系统分享（含 WhatsApp）；临时文件用后删 |
-| 今日 | 销售列表、搜索单号/手机/客户 |
-| 管理 | 商品（自动/手动条码）、分类（选择器不手打）、客户供应商、进货、盘点、报表、日结 |
-| 商品图 | 可选开启；文件在 `product_images/`，与 SQLite 分开 |
-| 条码 | 打印队列 + **批量导出 PNG**（条码下带商品全名） |
-| 蓝牙小票 | 可选（默认关） |
-| 低库存 | LAN 推送提醒 |
-| 角色 | Admin 可改收款码；Staff 收银为主 |
+同步包含：
 
-### 故意只在 PC 做的
+- 商品、库存、分类、客户增量同步
+- 销售记录增量同步
+- WebSocket 实时变更提示
+- HTTP 定时对账和 WebSocket 断线重连
+- Mobile 离线销售持久化与重试
+- `client_sale_id` 幂等导入，避免重试导致重复记账
+- 多设备离线收据号防碰撞
+- Desktop 销售/进货/盘点后库存回传 Mobile
+- Desktop 作废销售状态回传 Mobile
+- 强制全量对账
 
-- 条码**标签打印机**硬件对话框  
-- Windows 备份 / 还原整库  
+## 手机端功能
 
-其余日常收银 / 管货手机基本可对等。对照表见仓库内 `MOBILE_PC_PARITY.md`（若已同步）。
+- 收银 POS、商品搜索和摄像头扫码
+- 现金 / 卡 / DuitNow / 赊账
+- 折扣、挂单、今日销售
+- 商品、分类、客户、供应商、进货、盘点和报表
+- 电子收据 PDF / 分享
+- 条码导出与打印队列
+- 可选蓝牙小票打印
 
----
+Windows 特有的硬件标签打印和整库备份/还原仍由 Desktop 处理。
 
-## 版本简表
-
-| Tag | 要点 |
-|-----|------|
-| **v1.4.1-mobile** | 登录/品牌：**黄金发宝号** |
-| v1.4.0-mobile | 连续扫码、分类对齐 PC、商品图、BT、条码批量导出 |
-| v1.3.0 / 1.2.0 | LAN 同步、电子收据、摄像头扫码、本机 SQLite 全功能移植 |
-
----
-
-## 开发者构建
+## 开发与验证
 
 ```bash
-cd mobile   # 若在 monorepo；本 APK 仓根目录即 Flutter 工程时直接：
 flutter pub get
+flutter analyze --no-fatal-infos --no-fatal-warnings
+flutter test
 flutter build apk --release
-# 产物：build/app/outputs/flutter-apk/app-release.apk
 ```
 
-桌面联调文档（若在源码树）：`LAN_SYNC.md` · `E_RECEIPT_AND_SCAN.md` · `NEXT_BATCH_NOTES.md`
+正式 CI 会执行相同的 Analyze、测试和 Android Release APK 构建，并把 APK 作为 workflow artifact 上传。
 
----
+## 仓库分支约定
 
-## 相关链接
+- `main`：历史 APK / Releases / 分发说明
+- `source/main`：当前 Flutter 源码主线
+- 功能修复通过 PR 合并到源码主线后再构建 APK
 
-- **PC 仓库（装 Windows / 开同步）**：[tyz11234/-CNKH_POS_V5](https://github.com/tyz11234/-CNKH_POS_V5)
-- **本仓 Releases（下 APK）**：[Releases](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases)
-
-有问题先看：同一 Wi‑Fi、防火墙放行 8787、PC 已点「同步/配对」、手机 Token 一致。
+这样 APK 分发历史和可维护源码不会再混在一起。
