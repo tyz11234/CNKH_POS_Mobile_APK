@@ -33,7 +33,8 @@ void main() {
 }
 
 class CnkhPosMobileApp extends StatelessWidget {
-  const CnkhPosMobileApp({super.key});
+  const CnkhPosMobileApp({super.key, this.repository});
+  final PosRepository? repository;
 
   @override
   Widget build(BuildContext context) {
@@ -41,13 +42,14 @@ class CnkhPosMobileApp extends StatelessWidget {
       title: 'CNKH POS Mobile',
       debugShowCheckedModeBanner: false,
       theme: buildCnkhTheme(),
-      home: const _Root(),
+      home: _Root(repository: repository),
     );
   }
 }
 
 class _Root extends StatefulWidget {
-  const _Root();
+  const _Root({this.repository});
+  final PosRepository? repository;
   @override
   State<_Root> createState() => _RootState();
 }
@@ -55,7 +57,7 @@ class _Root extends StatefulWidget {
 class _RootState extends State<_Root> {
   AppUser? _user;
   final _qr = QrStorage();
-  final _repo = PosRepository();
+  late final _repo = widget.repository ?? PosRepository();
 
   @override
   Widget build(BuildContext context) {

@@ -137,8 +137,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       );
 
   Future<void> _saveSyncCfg() async {
-    await widget.repo.setSetting('lan_sync_host', _syncHost.text.trim());
-    await widget.repo.setSetting('lan_sync_token', _syncToken.text.trim());
+    await LanSyncClient(widget.repo).saveConfig(_cfg);
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('同步地址已保存 / Sync endpoint saved')),
