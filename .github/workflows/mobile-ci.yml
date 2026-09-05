@@ -3,10 +3,12 @@ name: Mobile CI
 on:
   push:
     branches:
+      - source/main
       - feat/receipt-template-1.6.0
       - fix/lan-sync-consistency
   pull_request:
     branches:
+      - source/main
       - feat/receipt-template-1.6.0
 
 permissions:
