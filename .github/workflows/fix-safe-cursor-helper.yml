@@ -1,0 +1,44 @@
+name: Fix Safe Cursor Helper
+
+on:
+  push:
+    branches:
+      - fix/lan-sync-consistency
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/lan-sync-consistency
+          fetch-depth: 0
+      - name: Insert missing helper
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path('lib/services/lan_sync.dart')
+          text = p.read_text(encoding='utf-8')
+          if 'String _safeCatalogCursor(' not in text:
+              marker = """  String _nextCursor(\n    String current,\n    List<Map<String, dynamic>> bodies,\n    Iterable<Object?> rawItems,\n  ) {\n"""
+              helper = """  String _safeCatalogCursor(\n    String current,\n    List<Map<String, dynamic>> bodies,\n    Iterable<Object?> rawItems,\n  ) {\n    final currentNumeric = int.tryParse(current);\n    final cursors = <int>[];\n    for (final body in bodies) {\n      final value = body['cursor'];\n      final parsed = value is num ? value.toInt() : int.tryParse('$value');\n      if (parsed != null) cursors.add(parsed);\n    }\n    if (cursors.length == bodies.length && cursors.isNotEmpty) {\n      final safe = cursors.reduce(min);\n      if (currentNumeric != null && safe < currentNumeric) {\n        return '$currentNumeric';\n      }\n      return '$safe';\n    }\n    return _nextCursor(current, bodies, rawItems);\n  }\n\n"""
+              if marker not in text:
+                  raise SystemExit('cursor marker not found')
+              text = text.replace(marker, helper + marker, 1)
+              p.write_text(text, encoding='utf-8')
+      - name: Commit helper
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo "No changes"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add lib/services/lan_sync.dart
+          git commit -m "fix: add safe catalog cursor helper"
+          git push origin HEAD:fix/lan-sync-consistency
