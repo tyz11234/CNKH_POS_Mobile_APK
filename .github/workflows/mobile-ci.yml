@@ -6,13 +6,15 @@ on:
       - source/main
       - feat/receipt-template-1.6.0
       - fix/lan-sync-consistency
+    tags:
+      - 'v*-mobile'
   pull_request:
     branches:
       - source/main
       - feat/receipt-template-1.6.0
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build-android:
@@ -32,8 +34,6 @@ jobs:
         run: flutter pub get
 
       - name: Analyze
-        # Keep analyzer errors fatal. The legacy Mobile source currently has
-        # pre-existing info/warning lints outside this LAN-sync change scope.
         run: flutter analyze --no-fatal-infos --no-fatal-warnings
 
       - name: Test
@@ -42,9 +42,34 @@ jobs:
       - name: Build Android release APK
         run: flutter build apk --release
 
+      - name: Stage APKs
+        shell: bash
+        run: |
+          set -euo pipefail
+          ver=$(grep '^version:' pubspec.yaml | awk '{print $2}')
+          semver=${ver%%+*}
+          src='build/app/outputs/flutter-apk/app-release.apk'
+          test -f "$src"
+          mkdir -p dist
+          cp "$src" dist/CNKH_POS_Mobile.apk
+          cp "$src" "dist/CNKH_POS_Mobile_v${semver}.apk"
+          echo "RELEASE_TAG=v${semver}-mobile" >> "$GITHUB_ENV"
+          echo "APP_VERSION=${ver}" >> "$GITHUB_ENV"
+
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: CNKH_POS_Mobile_release
-          path: build/app/outputs/flutter-apk/app-release.apk
+          path: dist/*.apk
           if-no-files-found: error
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/') || (github.ref == 'refs/heads/source/main' && contains(github.event.head_commit.message, '[release]'))
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || env.RELEASE_TAG }}
+          name: CNKH POS Mobile ${{ env.APP_VERSION }}
+          files: dist/*.apk
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
