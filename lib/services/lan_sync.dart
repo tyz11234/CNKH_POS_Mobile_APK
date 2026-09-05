@@ -221,7 +221,7 @@ class LanSyncClient {
         }
       }
 
-      final nextCursor = _nextCursor(
+      final nextCursor = _safeCatalogCursor(
         since,
         <Map<String, dynamic>>[pBody, cBody, catBody],
         <Object?>[...products, ...customers, ...categories],
