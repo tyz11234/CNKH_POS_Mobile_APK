@@ -239,6 +239,28 @@ class LanSyncClient {
     }
   }
 
+  String _safeCatalogCursor(
+    String current,
+    List<Map<String, dynamic>> bodies,
+    Iterable<Object?> rawItems,
+  ) {
+    final currentNumeric = int.tryParse(current);
+    final cursors = <int>[];
+    for (final body in bodies) {
+      final value = body['cursor'];
+      final parsed = value is num ? value.toInt() : int.tryParse('$value');
+      if (parsed != null) cursors.add(parsed);
+    }
+    if (cursors.length == bodies.length && cursors.isNotEmpty) {
+      final safe = cursors.reduce(min);
+      if (currentNumeric != null && safe < currentNumeric) {
+        return '$currentNumeric';
+      }
+      return '$safe';
+    }
+    return _nextCursor(current, bodies, rawItems);
+  }
+
   String _nextCursor(
     String current,
     List<Map<String, dynamic>> bodies,
