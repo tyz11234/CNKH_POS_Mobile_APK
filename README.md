@@ -1,17 +1,37 @@
 # 黄金发宝号 · 手机收银 APK
 
+> README 最后更新：**2026-09-05**
+
 本仓库的 `main` 分支用于 **Android APK / Releases 分发**。可维护的 Flutter Mobile 源码放在 [`source/main`](https://github.com/tyz11234/CNKH_POS_Mobile_APK/tree/source/main)，并与 **CNKH_POS_Desktop** 局域网协议同步维护。
 
 | | |
 |--|--|
 | 店名 | **黄金发宝号** |
 | 当前正式 APK | **1.7.2**（`v1.7.2-mobile`） |
+| 正式 APK 发布日期 | **2026-09-04** |
 | 当前源码 | **1.8.0+22**（`source/main`） |
+| 当前源码更新日期 | **2026-09-05** |
 | APK 下载 | [Releases](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases) |
 | Mobile 源码 | [`source/main`](https://github.com/tyz11234/CNKH_POS_Mobile_APK/tree/source/main) |
 | PC 桌面 | [CNKH_POS_Desktop](https://github.com/tyz11234/CNKH_POS_Desktop) |
 
 > 当前源码版本高于已发布 APK 并不代表 1.8.0 已正式发布。只有对应 GitHub Release 实际创建并附带 APK 后，才把该版本视为正式发布版本。
+
+---
+
+## 版本概览
+
+| 版本 | 状态 | 更新 / 发布日期 | 重点 |
+|---|---|---|---|
+| `1.8.0+22` | 当前源码，未正式发布 | **2026-09-05** | LAN 同步一致性、增量 cursor、断线重连、HTTP 对账、离线销售幂等、多设备收据号防碰撞、Android 构建工具链更新 |
+| `1.7.2+21` | 正式 APK | **2026-09-04** | Noto Sans SC 中文电子收据、WhatsApp PDF 分享 |
+| `1.6.0+18` | 正式 APK | **2026-09-04** | 小票模板编辑 / 预览、销售小票详情 |
+| `1.5.0+17` | 正式 APK | **2026-09-04** | WhatsApp PDF、电子收据缓存、结账与销售列表 UI 修正 |
+| `1.4.2+16` | 正式 APK | **2026-09-04** | 品牌、电子收据缓存、今日销售列表修正 |
+| `1.4.1+15` | 正式 APK | **2026-09-04** | 黄金发宝号品牌整理，延续 1.4.0 功能包 |
+| `1.4.0+14` | 正式 APK | **2026-09-04** | 连续扫码、分类、商品图、LAN、蓝牙打印、条码队列 |
+
+正式 APK 日期以 GitHub Release 的 `published_at` 日期为准；未正式发布的源码版本使用源码更新日期。
 
 ---
 
@@ -50,6 +70,8 @@
 ---
 
 ## 已发布 1.7.2 重点
+
+**发布日期：2026-09-04**
 
 - 电子收据 PDF 中文不乱码
 - WhatsApp 分享 PDF
