@@ -626,6 +626,17 @@ class LanSyncClient {
         for (final m in rows) {
           final id = m['id'] as String;
           final canonicalReceipt = mappedById[id];
+          if (canonicalReceipt != null &&
+              canonicalReceipt != m['receipt_no']?.toString()) {
+            // A WebSocket/poll may have already pulled the same server sale
+            // under its canonical receipt while this push was in flight.
+            // Remove that synced duplicate before renaming the local outbox row.
+            await txn.delete(
+              'sales',
+              where: 'receipt_no=? AND id<>?',
+              whereArgs: [canonicalReceipt, id],
+            );
+          }
           await txn.update(
             'sales',
             <String, Object?>{
@@ -676,19 +687,22 @@ class LanSyncClient {
             limit: 1,
           );
           final deleted = (m['is_deleted'] as num?)?.toInt() ?? 0;
-          if (existing.isNotEmpty &&
-              (m['sold_at'] == null || m['sold_at'].toString().isEmpty)) {
-            await txn.update(
-              'sales',
-              {
-                'voided': deleted == 0 ? 1 : deleted,
-                'void_note': m['void_note']?.toString() ?? 'remote deleted',
-                'synced_at': DateTime.now().toIso8601String(),
-              },
-              where: 'id=?',
-              whereArgs: [existing.first['id']],
-            );
-            changed++;
+          final isTombstone =
+              m['sold_at'] == null || m['sold_at'].toString().isEmpty;
+          if (isTombstone) {
+            if (existing.isNotEmpty) {
+              await txn.update(
+                'sales',
+                {
+                  'voided': deleted == 0 ? 1 : deleted,
+                  'void_note': m['void_note']?.toString() ?? 'remote deleted',
+                  'synced_at': DateTime.now().toIso8601String(),
+                },
+                where: 'id=?',
+                whereArgs: [existing.first['id']],
+              );
+              changed++;
+            }
             continue;
           }
 
@@ -892,7 +906,15 @@ class LanLiveSync {
       final data = msg is String ? jsonDecode(msg) : null;
       if (data is! Map) return;
       final t = data['type']?.toString() ?? '';
-      if (t == 'sale') {
+      if (t == 'reconcile') {
+        final c = _cfg;
+        if (c != null) {
+          await client.forceReconcile(c);
+          connected = true;
+          onRemoteChange?.call();
+          await _emitStatus();
+        }
+      } else if (t == 'sale') {
         await _onSaleEvent();
       } else if (t == 'catalog' ||
           t == 'category' ||
