@@ -1,0 +1,46 @@
+name: Mobile CI
+
+on:
+  push:
+    branches:
+      - feat/receipt-template-1.6.0
+      - fix/lan-sync-consistency
+  pull_request:
+    branches:
+      - feat/receipt-template-1.6.0
+
+permissions:
+  contents: read
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Pub get
+        run: flutter pub get
+
+      - name: Analyze
+        run: flutter analyze
+
+      - name: Test
+        run: flutter test
+
+      - name: Build Android release APK
+        run: flutter build apk --release
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CNKH_POS_Mobile_release
+          path: build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
