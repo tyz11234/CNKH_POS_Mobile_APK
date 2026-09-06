@@ -74,6 +74,49 @@ Future<void> rememberEntityId(
 String _hex(List<int> bytes) =>
     bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
 
+Future<Map<String, Object?>> _annotateApprovedDuplicatePurchase(
+  DatabaseExecutor db,
+  Map<String, Object?> purchasePayload,
+) async {
+  final out = Map<String, Object?>.from(purchasePayload);
+  if (out['source']?.toString() != 'ocr') return out;
+  final draftId = out['draft_id']?.toString() ?? '';
+  if (draftId.isEmpty) return out;
+
+  // commitDraft performs the real duplicate gate before queueMutation. If this
+  // transaction has reached the outbox while an older unreversed purchase with
+  // the same local Supplier + Invoice already exists, the user has explicitly
+  // taken the Admin Force Commit path. Mark the remote mutation so Desktop can
+  // apply its own cross-device duplicate gate without rejecting that approved
+  // exception. The exact user-entered reason remains in Mobile audit history.
+  final draftRows = await db.query(
+    'purchase_drafts',
+    columns: const ['supplier_id', 'invoice_no'],
+    where: 'id=?',
+    whereArgs: [draftId],
+    limit: 1,
+  );
+  if (draftRows.isEmpty) return out;
+  final supplierId = draftRows.first['supplier_id']?.toString().trim() ?? '';
+  final invoiceNo = draftRows.first['invoice_no']?.toString().trim() ?? '';
+  if (supplierId.isEmpty || invoiceNo.isEmpty) return out;
+
+  final duplicates = await db.rawQuery(
+    '''SELECT id FROM purchases
+       WHERE supplier_id=?
+         AND lower(trim(invoice_no))=lower(trim(?))
+         AND COALESCE(reversed,0)=0
+       LIMIT 1''',
+    [supplierId, invoiceNo],
+  );
+  if (duplicates.isEmpty) return out;
+
+  out['duplicate_override'] = true;
+  out['duplicate_override_reason'] =
+      'Mobile Admin 已二次确认重复 Invoice；详细原因保存在 Mobile Audit。';
+  return out;
+}
+
 Future<void> _queueOcrOriginalAttachment(
   DatabaseExecutor db,
   String purchaseId,
@@ -94,8 +137,6 @@ Future<void> _queueOcrOriginalAttachment(
   final path = draftRows.first['original_image_path']?.toString() ?? '';
   if (path.isEmpty) return;
 
-  // File preparation is intentionally best-effort. A local image read failure
-  // must never roll back the already-confirmed Purchase/stock transaction.
   try {
     final file = File(path);
     if (!await file.exists()) return;
@@ -107,9 +148,6 @@ Future<void> _queueOcrOriginalAttachment(
     await db.insert('sync_outbox', {
       'id': operationId,
       'kind': 'purchase_attachment',
-      // The stable Purchase id lets SQLite ACK triggers update the local
-      // purchase_attachments row even though that row is created later in the
-      // same Purchase transaction.
       'entity_id': purchaseId,
       'payload_json': jsonEncode(<String, Object?>{
         'attachment_id': attachmentId,
@@ -137,15 +175,18 @@ Future<void> queueMutation(
   Map<String, Object?> payload,
 ) async {
   if (isDesktopHost || (await readSetting(db, 'lan_sync_host')).isEmpty) return;
+  final effectivePayload = kind == 'purchase'
+      ? await _annotateApprovedDuplicatePurchase(db, payload)
+      : payload;
   await db.insert('sync_outbox', {
     'id': AppDatabase.newId(),
     'kind': kind,
     'entity_id': entityId,
-    'payload_json': jsonEncode(payload),
+    'payload_json': jsonEncode(effectivePayload),
     'created_at': DateTime.now().toUtc().toIso8601String(),
   });
   if (kind == 'purchase') {
-    await _queueOcrOriginalAttachment(db, entityId, payload);
+    await _queueOcrOriginalAttachment(db, entityId, effectivePayload);
   }
 }
 
