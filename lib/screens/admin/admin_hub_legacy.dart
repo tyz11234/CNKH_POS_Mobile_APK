@@ -403,13 +403,59 @@ class StocktakePage extends StatefulWidget {
 }
 
 class _StocktakePageState extends State<StocktakePage> {
+  static const _pageSize = 50;
   List<Product> _items = [];
+  final _q = TextEditingController();
+  int _page = 0;
+  bool _hasNext = false;
+  bool _loading = true;
+  int _loadVersion = 0;
+
   @override
   void initState() {
     super.initState();
-    widget.repo.searchProducts('', limit: 100).then((v) {
-      if (mounted) setState(() => _items = v);
+    _q.addListener(_onQueryChanged);
+    _load();
+  }
+
+  @override
+  void dispose() {
+    _q.removeListener(_onQueryChanged);
+    _q.dispose();
+    super.dispose();
+  }
+
+  void _onQueryChanged() {
+    _page = 0;
+    _load();
+  }
+
+  Future<void> _load() async {
+    final version = ++_loadVersion;
+    if (mounted) setState(() => _loading = true);
+    final rows = await widget.repo.searchProducts(
+      _q.text,
+      limit: _pageSize + 1,
+      offset: _page * _pageSize,
+    );
+    if (!mounted || version != _loadVersion) return;
+    if (rows.isEmpty && _page > 0) {
+      _page--;
+      await _load();
+      return;
+    }
+    setState(() {
+      _hasNext = rows.length > _pageSize;
+      _items = rows.take(_pageSize).toList(growable: false);
+      _loading = false;
     });
+  }
+
+  Future<void> _changePage(int delta) async {
+    final next = _page + delta;
+    if (next < 0 || (delta > 0 && !_hasNext)) return;
+    setState(() => _page = next);
+    await _load();
   }
 
   Future<void> _adjust(Product p) async {
@@ -436,25 +482,61 @@ class _StocktakePageState extends State<StocktakePage> {
       operator: widget.user.username,
       reason: 'stocktake',
     );
-    final list = await widget.repo.searchProducts('', limit: 100);
-    if (mounted) setState(() => _items = list);
+    await _load();
   }
 
   @override
   Widget build(BuildContext context) {
     return _ScaffoldPage(
       title: '盘点 / Stocktake',
-      body: ListView.builder(
-        itemCount: _items.length,
-        itemBuilder: (context, i) {
-          final p = _items[i];
-          return ListTile(
-            title: Text(p.nameZh),
-            subtitle: Text('账面 ${p.stock} ${p.unit}'),
-            trailing: const Icon(Icons.edit),
-            onTap: () => _adjust(p),
-          );
-        },
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(12),
+            child: TextField(
+              controller: _q,
+              decoration: const InputDecoration(
+                prefixIcon: Icon(Icons.search),
+                hintText: '搜索商品',
+              ),
+            ),
+          ),
+          Expanded(
+            child: _loading
+                ? const Center(child: CircularProgressIndicator())
+                : ListView.builder(
+                    itemCount: _items.length,
+                    itemBuilder: (context, i) {
+                      final p = _items[i];
+                      return ListTile(
+                        title: Text(p.nameZh),
+                        subtitle: Text('账面 ${p.stock} ${p.unit}'),
+                        trailing: const Icon(Icons.edit),
+                        onTap: () => _adjust(p),
+                      );
+                    },
+                  ),
+          ),
+          SafeArea(
+            top: false,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
+              child: Row(
+                children: [
+                  OutlinedButton(
+                    onPressed: _page == 0 || _loading ? null : () => _changePage(-1),
+                    child: const Text('上一页'),
+                  ),
+                  Expanded(child: Center(child: Text('第 ${_page + 1} 页'))),
+                  OutlinedButton(
+                    onPressed: !_hasNext || _loading ? null : () => _changePage(1),
+                    child: const Text('下一页'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -563,11 +645,14 @@ class DailyClosePage extends StatefulWidget {
 }
 
 class _DailyClosePageState extends State<DailyClosePage> {
+  static const _pageSize = 50;
   final _open = TextEditingController(text: '0.00');
   final _count = TextEditingController(text: '0.00');
   final _notes = TextEditingController();
   int _systemCash = 0;
   List<Map<String, Object?>> _history = [];
+  int _page = 0;
+  bool _hasNext = false;
 
   @override
   void initState() {
@@ -577,9 +662,28 @@ class _DailyClosePageState extends State<DailyClosePage> {
 
   Future<void> _load() async {
     final dash = await widget.repo.dashboardToday();
-    _systemCash = dash['cash'] ?? 0;
-    _history = await widget.repo.listClosings();
-    if (mounted) setState(() {});
+    final rows = await widget.repo.listClosings(
+      limit: _pageSize + 1,
+      offset: _page * _pageSize,
+    );
+    if (!mounted) return;
+    if (rows.isEmpty && _page > 0) {
+      _page--;
+      await _load();
+      return;
+    }
+    setState(() {
+      _systemCash = dash['cash'] ?? 0;
+      _hasNext = rows.length > _pageSize;
+      _history = rows.take(_pageSize).toList(growable: false);
+    });
+  }
+
+  Future<void> _changePage(int delta) async {
+    final next = _page + delta;
+    if (next < 0 || (delta > 0 && !_hasNext)) return;
+    setState(() => _page = next);
+    await _load();
   }
 
   Future<void> _save() async {
@@ -596,6 +700,7 @@ class _DailyClosePageState extends State<DailyClosePage> {
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('日结已保存 / Closing saved')),
     );
+    _page = 0;
     await _load();
   }
 
@@ -620,6 +725,19 @@ class _DailyClosePageState extends State<DailyClosePage> {
                 subtitle: Text(
                     '系统 ${formatRm(h['system_cash_cents'] as int)} · 实盘 ${formatRm(h['counted_cash_cents'] as int)}'),
               )),
+          Row(
+            children: [
+              OutlinedButton(
+                onPressed: _page == 0 ? null : () => _changePage(-1),
+                child: const Text('上一页'),
+              ),
+              Expanded(child: Center(child: Text('第 ${_page + 1} 页'))),
+              OutlinedButton(
+                onPressed: !_hasNext ? null : () => _changePage(1),
+                child: const Text('下一页'),
+              ),
+            ],
+          ),
         ],
       ),
     );
@@ -694,10 +812,14 @@ class AuditLogPage extends StatefulWidget {
 }
 
 class _AuditLogPageState extends State<AuditLogPage> {
+  static const _pageSize = 50;
   bool _todayOnly = true;
   String _userFilter = '';
   List<AuditEntry> _rows = [];
   bool _loading = true;
+  int _page = 0;
+  bool _hasNext = false;
+  int _loadVersion = 0;
 
   @override
   void initState() {
@@ -706,15 +828,32 @@ class _AuditLogPageState extends State<AuditLogPage> {
   }
 
   Future<void> _load() async {
+    final version = ++_loadVersion;
+    if (mounted) setState(() => _loading = true);
     final list = await widget.repo.listAudit(
       todayOnly: _todayOnly,
       username: _userFilter.trim().isEmpty ? null : _userFilter.trim(),
+      limit: _pageSize + 1,
+      offset: _page * _pageSize,
     );
-    if (!mounted) return;
+    if (!mounted || version != _loadVersion) return;
+    if (list.isEmpty && _page > 0) {
+      _page--;
+      await _load();
+      return;
+    }
     setState(() {
-      _rows = list;
+      _rows = list.take(_pageSize).toList(growable: false);
+      _hasNext = list.length > _pageSize;
       _loading = false;
     });
+  }
+
+  Future<void> _changePage(int delta) async {
+    final next = _page + delta;
+    if (next < 0 || (delta > 0 && !_hasNext)) return;
+    setState(() => _page = next);
+    await _load();
   }
 
   @override
@@ -731,7 +870,10 @@ class _AuditLogPageState extends State<AuditLogPage> {
                   label: const Text('今日'),
                   selected: _todayOnly,
                   onSelected: (v) {
-                    setState(() => _todayOnly = v);
+                    setState(() {
+                      _todayOnly = v;
+                      _page = 0;
+                    });
                     _load();
                   },
                 ),
@@ -744,6 +886,7 @@ class _AuditLogPageState extends State<AuditLogPage> {
                     ),
                     onSubmitted: (v) {
                       _userFilter = v;
+                      _page = 0;
                       _load();
                     },
                   ),
@@ -768,7 +911,8 @@ class _AuditLogPageState extends State<AuditLogPage> {
                               style: const TextStyle(fontWeight: FontWeight.w700),
                             ),
                             subtitle: Text(
-                              '${a.occurredAt.replaceFirst('T', ' ').substring(0, 19)}\n'
+                              '${a.occurredAt.replaceFirst('T', ' ').substring(0, 19)}
+'
                               '${a.username} (${a.role})  ${a.oldValue} → ${a.newValue}'
                               '${a.reason.isEmpty ? '' : ' · ${a.reason}'}',
                             ),
@@ -776,6 +920,25 @@ class _AuditLogPageState extends State<AuditLogPage> {
                           );
                         },
                       ),
+          ),
+          SafeArea(
+            top: false,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
+              child: Row(
+                children: [
+                  OutlinedButton(
+                    onPressed: _page == 0 || _loading ? null : () => _changePage(-1),
+                    child: const Text('上一页'),
+                  ),
+                  Expanded(child: Center(child: Text('第 ${_page + 1} 页'))),
+                  OutlinedButton(
+                    onPressed: !_hasNext || _loading ? null : () => _changePage(1),
+                    child: const Text('下一页'),
+                  ),
+                ],
+              ),
+            ),
           ),
         ],
       ),

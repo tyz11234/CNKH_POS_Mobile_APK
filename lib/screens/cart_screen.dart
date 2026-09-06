@@ -44,12 +44,16 @@ class _CartScreenState extends State<CartScreen> {
   String _category = ''; // empty = 全部
   bool _loading = true;
   bool _imagesOn = false;
+  static const _productPageSize = 40;
+  int _productPage = 0;
+  bool _productHasNext = false;
+  int _productRequest = 0;
 
   @override
   void initState() {
     super.initState();
     _reload('');
-    _search.addListener(() => _reload(_search.text));
+    _search.addListener(_onSearchChanged);
     widget.repo.listCategories().then((c) {
       if (mounted) setState(() => _categories = c);
     });
@@ -60,20 +64,43 @@ class _CartScreenState extends State<CartScreen> {
 
   @override
   void dispose() {
+    _search.removeListener(_onSearchChanged);
     _search.dispose();
     super.dispose();
   }
 
+  void _onSearchChanged() {
+    _productPage = 0;
+    _reload(_search.text);
+  }
+
   Future<void> _reload(String q) async {
+    final request = ++_productRequest;
+    if (mounted) setState(() => _loading = true);
     final list = await widget.repo.searchProducts(
       q,
+      limit: _productPageSize + 1,
+      offset: _productPage * _productPageSize,
       category: _category.isEmpty ? null : _category,
     );
-    if (!mounted) return;
+    if (!mounted || request != _productRequest) return;
+    if (list.isEmpty && _productPage > 0) {
+      _productPage--;
+      await _reload(q);
+      return;
+    }
     setState(() {
-      _results = list;
+      _productHasNext = list.length > _productPageSize;
+      _results = list.take(_productPageSize).toList(growable: false);
       _loading = false;
     });
+  }
+
+  Future<void> _changeProductPage(int delta) async {
+    final next = _productPage + delta;
+    if (next < 0 || (delta > 0 && !_productHasNext)) return;
+    setState(() => _productPage = next);
+    await _reload(_search.text);
   }
 
   Future<bool> _add(Product p, {int addQty = 1}) async {
@@ -289,7 +316,10 @@ class _CartScreenState extends State<CartScreen> {
                         label: const Text('全部'),
                         selected: _category.isEmpty,
                         onSelected: (_) {
-                          setState(() => _category = '');
+                          setState(() {
+                            _category = '';
+                            _productPage = 0;
+                          });
                           _reload(_search.text);
                         },
                       ),
@@ -301,7 +331,10 @@ class _CartScreenState extends State<CartScreen> {
                           label: Text(c.name),
                           selected: _category == c.name,
                           onSelected: (_) {
-                            setState(() => _category = c.name);
+                            setState(() {
+                              _category = c.name;
+                              _productPage = 0;
+                            });
                             _reload(_search.text);
                           },
                         ),
@@ -363,13 +396,37 @@ class _CartScreenState extends State<CartScreen> {
               : ListView.separated(
                   padding: const EdgeInsets.symmetric(horizontal: 16),
                   scrollDirection: Axis.horizontal,
-                  itemCount: _results.length.clamp(0, 40),
+                  itemCount: _results.length,
                   separatorBuilder: (_, __) => const SizedBox(width: 8),
                   itemBuilder: (context, i) {
                     final p = _results[i];
                     return _ProductChip(product: p, showImage: _imagesOn, onTap: () { _add(p); });
                   },
                 ),
+        ),
+        SizedBox(
+          height: 40,
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              TextButton(
+                onPressed: _loading || _productPage == 0
+                    ? null
+                    : () => _changeProductPage(-1),
+                child: const Text('上一页'),
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                child: Text('第 ${_productPage + 1} 页'),
+              ),
+              TextButton(
+                onPressed: _loading || !_productHasNext
+                    ? null
+                    : () => _changeProductPage(1),
+                child: const Text('下一页'),
+              ),
+            ],
+          ),
         ),
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),

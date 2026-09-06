@@ -31,6 +31,9 @@ class _EnhancedPurchasesPageState extends State<EnhancedPurchasesPage> {
   List<Map<String, Object?>> _rows = [];
   List<Map<String, Object?>> _drafts = [];
   String? _historySyncError;
+  static const _pageSize = 50;
+  int _historyPage = 0;
+  bool _historyHasNext = false;
   static const _invoiceParser = PurchaseInvoiceParser();
 
   PurchaseOcrRepository get _ocrRepo => PurchaseOcrRepository(widget.repo);
@@ -41,20 +44,38 @@ class _EnhancedPurchasesPageState extends State<EnhancedPurchasesPage> {
     _load();
   }
 
-  Future<void> _load() async {
+  Future<void> _load({bool syncHistory = true}) async {
     String? syncError;
-    try {
-      await PurchaseHistorySync(widget.repo).pullFromSavedDesktop();
-    } catch (e) {
-      syncError = '进货历史同步失败：$e';
+    if (syncHistory) {
+      try {
+        await PurchaseHistorySync(widget.repo).pullFromSavedDesktop();
+      } catch (e) {
+        syncError = '进货历史同步失败：$e';
+      }
     }
-    _rows = await widget.repo.listPurchases();
+    final rows = await widget.repo.listPurchases(
+      limit: _pageSize + 1,
+      offset: _historyPage * _pageSize,
+    );
     _drafts = await _ocrRepo.listDrafts();
-    if (mounted) {
-      setState(() {
-        _historySyncError = syncError;
-      });
+    if (!mounted) return;
+    if (rows.isEmpty && _historyPage > 0) {
+      _historyPage--;
+      await _load(syncHistory: false);
+      return;
     }
+    setState(() {
+      _rows = rows.take(_pageSize).toList(growable: false);
+      _historyHasNext = rows.length > _pageSize;
+      if (syncHistory || syncError != null) _historySyncError = syncError;
+    });
+  }
+
+  Future<void> _changeHistoryPage(int delta) async {
+    final next = _historyPage + delta;
+    if (next < 0 || (delta > 0 && !_historyHasNext)) return;
+    setState(() => _historyPage = next);
+    await _load(syncHistory: false);
   }
 
   Future<void> _openAliases() async {
@@ -202,19 +223,25 @@ class _EnhancedPurchasesPageState extends State<EnhancedPurchasesPage> {
   }
 
   Future<void> _createManual() async {
-    final suppliers = await widget.repo.listSuppliers();
-    final products = await widget.repo.searchProducts('', limit: 50);
+    const pageSize = 50;
+    var supplierPage = 0;
+    var productPage = 0;
+    var supplierRows = await widget.repo.listSuppliers(limit: pageSize + 1);
+    var productRows = await widget.repo.searchProducts('', limit: pageSize + 1);
     if (!mounted) return;
-    if (suppliers.isEmpty || products.isEmpty) {
+    if (supplierRows.isEmpty || productRows.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('请先建立至少一个供应商和商品')),
       );
       return;
     }
-
-    var supplier = suppliers.first;
-    var product = products.first;
-    final qty = TextEditingController(text: '10');
+    var supplierHasNext = supplierRows.length > pageSize;
+    var productHasNext = productRows.length > pageSize;
+    supplierRows = supplierRows.take(pageSize).toList(growable: false);
+    productRows = productRows.take(pageSize).toList(growable: false);
+    var supplier = supplierRows.first;
+    var product = productRows.first;
+    final qty = TextEditingController(text: '0');
     final cost = TextEditingController(
       text: centsToRm(product.costCents).toStringAsFixed(2),
     );
@@ -229,57 +256,154 @@ class _EnhancedPurchasesPageState extends State<EnhancedPurchasesPage> {
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setLocal) => AlertDialog(
           title: const Text('简易进货 / Simple purchase'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              DropdownButton<Supplier>(
-                isExpanded: true,
-                value: supplier,
-                items: [
-                  for (final s in suppliers)
-                    DropdownMenuItem(value: s, child: Text(s.name)),
-                ],
-                onChanged: (v) => setLocal(() => supplier = v!),
-              ),
-              DropdownButton<Product>(
-                isExpanded: true,
-                value: product,
-                items: [
-                  for (final p in products)
-                    DropdownMenuItem(value: p, child: Text(p.nameZh)),
-                ],
-                onChanged: (v) => setLocal(() {
-                  product = v!;
-                  cost.text = centsToRm(product.costCents).toStringAsFixed(2);
-                  costError = null;
-                }),
-              ),
-              TextField(
-                controller: qty,
-                keyboardType:
-                    const TextInputType.numberWithOptions(decimal: true),
-                onChanged: (_) {
-                  if (qtyError != null) setLocal(() => qtyError = null);
-                },
-                decoration: InputDecoration(
-                  labelText: '数量',
-                  errorText: qtyError,
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                DropdownButton<Supplier>(
+                  isExpanded: true,
+                  value: supplierRows.any((s) => s.id == supplier.id)
+                      ? supplier
+                      : null,
+                  hint: Text('已选：${supplier.name}（其他页）'),
+                  items: [
+                    for (final s in supplierRows)
+                      DropdownMenuItem(value: s, child: Text(s.name)),
+                  ],
+                  onChanged: (v) {
+                    if (v != null) setLocal(() => supplier = v);
+                  },
                 ),
-              ),
-              TextField(
-                controller: cost,
-                keyboardType:
-                    const TextInputType.numberWithOptions(decimal: true),
-                onChanged: (_) {
-                  if (costError != null) setLocal(() => costError = null);
-                },
-                decoration: InputDecoration(
-                  labelText: '成本 RM',
-                  prefixText: 'RM ',
-                  errorText: costError,
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    TextButton(
+                      onPressed: supplierPage == 0
+                          ? null
+                          : () async {
+                              final next = supplierPage - 1;
+                              final rows = await widget.repo.listSuppliers(
+                                limit: pageSize + 1,
+                                offset: next * pageSize,
+                              );
+                              if (!ctx.mounted) return;
+                              setLocal(() {
+                                supplierPage = next;
+                                supplierHasNext = rows.length > pageSize;
+                                supplierRows = rows.take(pageSize).toList();
+                              });
+                            },
+                      child: const Text('上一页'),
+                    ),
+                    Text('供应商 第 ${supplierPage + 1} 页'),
+                    TextButton(
+                      onPressed: !supplierHasNext
+                          ? null
+                          : () async {
+                              final next = supplierPage + 1;
+                              final rows = await widget.repo.listSuppliers(
+                                limit: pageSize + 1,
+                                offset: next * pageSize,
+                              );
+                              if (!ctx.mounted || rows.isEmpty) return;
+                              setLocal(() {
+                                supplierPage = next;
+                                supplierHasNext = rows.length > pageSize;
+                                supplierRows = rows.take(pageSize).toList();
+                              });
+                            },
+                      child: const Text('下一页'),
+                    ),
+                  ],
                 ),
-              ),
-            ],
+                DropdownButton<Product>(
+                  isExpanded: true,
+                  value: productRows.any((p) => p.id == product.id)
+                      ? product
+                      : null,
+                  hint: Text('已选：${product.nameZh}（其他页）'),
+                  items: [
+                    for (final p in productRows)
+                      DropdownMenuItem(value: p, child: Text(p.nameZh)),
+                  ],
+                  onChanged: (v) => setLocal(() {
+                    if (v == null) return;
+                    product = v;
+                    cost.text = centsToRm(product.costCents).toStringAsFixed(2);
+                    costError = null;
+                  }),
+                ),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    TextButton(
+                      onPressed: productPage == 0
+                          ? null
+                          : () async {
+                              final next = productPage - 1;
+                              final rows = await widget.repo.searchProducts(
+                                '',
+                                limit: pageSize + 1,
+                                offset: next * pageSize,
+                              );
+                              if (!ctx.mounted) return;
+                              setLocal(() {
+                                productPage = next;
+                                productHasNext = rows.length > pageSize;
+                                productRows = rows.take(pageSize).toList();
+                              });
+                            },
+                      child: const Text('上一页'),
+                    ),
+                    Text('商品 第 ${productPage + 1} 页'),
+                    TextButton(
+                      onPressed: !productHasNext
+                          ? null
+                          : () async {
+                              final next = productPage + 1;
+                              final rows = await widget.repo.searchProducts(
+                                '',
+                                limit: pageSize + 1,
+                                offset: next * pageSize,
+                              );
+                              if (!ctx.mounted || rows.isEmpty) return;
+                              setLocal(() {
+                                productPage = next;
+                                productHasNext = rows.length > pageSize;
+                                productRows = rows.take(pageSize).toList();
+                              });
+                            },
+                      child: const Text('下一页'),
+                    ),
+                  ],
+                ),
+                TextField(
+                  controller: qty,
+                  keyboardType:
+                      const TextInputType.numberWithOptions(decimal: true),
+                  onChanged: (_) {
+                    if (qtyError != null) setLocal(() => qtyError = null);
+                  },
+                  decoration: InputDecoration(
+                    labelText: '数量',
+                    errorText: qtyError,
+                  ),
+                ),
+                TextField(
+                  controller: cost,
+                  keyboardType:
+                      const TextInputType.numberWithOptions(decimal: true),
+                  onChanged: (_) {
+                    if (costError != null) setLocal(() => costError = null);
+                  },
+                  decoration: InputDecoration(
+                    labelText: '成本 RM',
+                    prefixText: 'RM ',
+                    errorText: costError,
+                  ),
+                ),
+              ],
+            ),
           ),
           actions: [
             TextButton(
@@ -342,8 +466,10 @@ class _EnhancedPurchasesPageState extends State<EnhancedPurchasesPage> {
       totalCents: total,
       operator: widget.user.username,
     );
+    _historyPage = 0;
     await _load();
   }
+
 
   @override
   Widget build(BuildContext context) {
@@ -371,6 +497,25 @@ class _EnhancedPurchasesPageState extends State<EnhancedPurchasesPage> {
             icon: const Icon(Icons.add),
           ),
         ],
+      ),
+      bottomNavigationBar: SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
+          child: Row(
+            children: [
+              OutlinedButton(
+                onPressed: _historyPage == 0 ? null : () => _changeHistoryPage(-1),
+                child: const Text('上一页'),
+              ),
+              Expanded(child: Center(child: Text('第 ${_historyPage + 1} 页'))),
+              OutlinedButton(
+                onPressed: !_historyHasNext ? null : () => _changeHistoryPage(1),
+                child: const Text('下一页'),
+              ),
+            ],
+          ),
+        ),
       ),
       body: Column(
         children: [
