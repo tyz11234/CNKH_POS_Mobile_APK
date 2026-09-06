@@ -2,7 +2,7 @@ import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart
 
 class LocalOcrService {
   LocalOcrService()
-      : _recognizer = TextRecognizer(script: TextRecognitionScript.latin);
+      : _recognizer = TextRecognizer(script: TextRecognitionScript.chinese);
 
   final TextRecognizer _recognizer;
 
