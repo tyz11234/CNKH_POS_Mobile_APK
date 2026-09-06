@@ -263,7 +263,7 @@ class _EnhancedPurchasesPageState extends State<EnhancedPurchasesPage> {
                 DropdownButton<Supplier>(
                   isExpanded: true,
                   value: supplierRows.any((s) => s.id == supplier.id)
-                      ? supplier
+                      ? supplierRows.firstWhere((s) => s.id == supplier.id)
                       : null,
                   hint: Text('已选：${supplier.name}（其他页）'),
                   items: [
@@ -319,7 +319,7 @@ class _EnhancedPurchasesPageState extends State<EnhancedPurchasesPage> {
                 DropdownButton<Product>(
                   isExpanded: true,
                   value: productRows.any((p) => p.id == product.id)
-                      ? product
+                      ? productRows.firstWhere((p) => p.id == product.id)
                       : null,
                   hint: Text('已选：${product.nameZh}（其他页）'),
                   items: [
