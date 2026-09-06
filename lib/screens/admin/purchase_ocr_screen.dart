@@ -59,6 +59,9 @@ class _PurchaseOcrScreenState extends State<PurchaseOcrScreen> {
   }
 
   Future<void> _start() async {
+    var createdOriginal = '';
+    var createdPreview = '';
+    var persistedDraft = false;
     try {
       _suppliers = await widget.repo.listSuppliers();
       _products = await widget.repo.searchProducts('', limit: 5000);
@@ -76,23 +79,36 @@ class _PurchaseOcrScreenState extends State<PurchaseOcrScreen> {
           return;
         }
         final draftId = AppDatabase.newId();
-        final savedPath = await _imageStore.saveCompressed(picked.path, draftId);
-        final rawText = await _recognizer.recognizeFile(savedPath);
+        final images =
+            await _imageStore.saveOriginalAndPreview(picked.path, draftId);
+        createdOriginal = images.originalPath;
+        createdPreview = images.previewPath;
+
+        // Recognition intentionally uses the byte-for-byte original. Preview is
+        // only for UI display and may be compressed/resized.
+        final rawText = await _recognizer.recognizeFile(images.originalPath);
         draft = _parser.parse(
           rawText,
           draftId: draftId,
           createdBy: widget.user.username,
-          imagePath: savedPath,
-        );
+          imagePath: images.previewPath,
+        ).copyWith(originalImagePath: images.originalPath);
         draft = await _ocrRepo.prepareDraft(draft);
       }
       await _ocrRepo.saveDraft(draft);
+      persistedDraft = true;
       if (!mounted) return;
       setState(() {
         _draft = draft;
         _busy = false;
       });
     } catch (e) {
+      if (!persistedDraft && widget.draftId == null) {
+        await _imageStore.deletePair(
+          originalPath: createdOriginal,
+          previewPath: createdPreview,
+        );
+      }
       if (!mounted) return;
       setState(() {
         _error = '$e';
@@ -490,6 +506,96 @@ class _PurchaseOcrScreenState extends State<PurchaseOcrScreen> {
     await _revalidate();
   }
 
+  Future<String?> _duplicateOverrideReason(
+    PurchaseDraft draft,
+    Map<String, Object?> duplicate,
+  ) async {
+    if (!widget.user.isAdmin) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              '重复 Invoice 已阻止。已存在 ${duplicate['purchase_no'] ?? duplicate['id']}；只有 Admin 可强制入库。',
+            ),
+          ),
+        );
+      }
+      return null;
+    }
+
+    final reason = TextEditingController();
+    String? reasonError;
+    final first = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setLocal) => AlertDialog(
+          title: const Text('发现重复 Invoice'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                '供应商 ${draft.supplierName} 的 Invoice ${draft.invoiceNo} 已经入库。\n'
+                '已有记录：${duplicate['purchase_no'] ?? duplicate['id']}\n'
+                '再次入库会再次增加库存。',
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: reason,
+                maxLines: 2,
+                onChanged: (_) {
+                  if (reasonError != null) setLocal(() => reasonError = null);
+                },
+                decoration: InputDecoration(
+                  labelText: '强制入库原因 / Override reason',
+                  errorText: reasonError,
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () {
+                if (reason.text.trim().isEmpty) {
+                  setLocal(() => reasonError = '必须填写原因');
+                  return;
+                }
+                Navigator.pop(ctx, true);
+              },
+              child: const Text('仍然入库 / Force Commit'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (first != true) return null;
+
+    final second = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('再次确认强制重复入库'),
+        content: const Text(
+          '这会创建另一笔 Purchase 并再次增加库存。系统会记录管理员、Invoice 和 Override 原因。确定继续吗？',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('返回'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('确认强制入库'),
+          ),
+        ],
+      ),
+    );
+    return second == true ? reason.text.trim() : null;
+  }
+
   Future<void> _confirm() async {
     if (_busy) return;
     setState(() => _busy = true);
@@ -540,7 +646,26 @@ class _PurchaseOcrScreenState extends State<PurchaseOcrScreen> {
         );
         if (ok != true) return;
       }
-      await _ocrRepo.commitDraft(draft, operator: widget.user.username);
+
+      var allowDuplicate = false;
+      var duplicateReason = '';
+      final duplicate = await _ocrRepo.findDuplicateInvoice(
+        draft.supplierId!,
+        draft.invoiceNo,
+      );
+      if (duplicate != null) {
+        final reason = await _duplicateOverrideReason(draft, duplicate);
+        if (reason == null) return;
+        allowDuplicate = true;
+        duplicateReason = reason;
+      }
+
+      await _ocrRepo.commitDraft(
+        draft,
+        operator: widget.user.username,
+        allowDuplicateInvoice: allowDuplicate,
+        duplicateOverrideReason: duplicateReason,
+      );
       committed = true;
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -554,6 +679,46 @@ class _PurchaseOcrScreenState extends State<PurchaseOcrScreen> {
       );
     } finally {
       if (!committed && mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _deleteDraft() async {
+    final draft = _draft;
+    if (draft == null || _busy) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('删除 OCR 草稿？'),
+        content: const Text(
+          '只会删除这份尚未入库的草稿、草稿商品行和未 Commit 的 Original/Preview 图片，不会影响任何已入库 Purchase。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('确认删除'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    setState(() => _busy = true);
+    try {
+      await _ocrRepo.deleteDraft(draft.draftId);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('OCR 草稿已删除')),
+      );
+      Navigator.pop(context, false);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _busy = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('$e')),
+      );
     }
   }
 
@@ -646,6 +811,11 @@ class _PurchaseOcrScreenState extends State<PurchaseOcrScreen> {
             tooltip: '单据金额',
             icon: const Icon(Icons.calculate_outlined),
           ),
+          IconButton(
+            onPressed: _busy ? null : _deleteDraft,
+            tooltip: '删除草稿',
+            icon: const Icon(Icons.delete_outline),
+          ),
         ],
       ),
       bottomNavigationBar: SafeArea(
@@ -732,6 +902,11 @@ class _PurchaseOcrScreenState extends State<PurchaseOcrScreen> {
                     '系统计算 ${formatRm(draft.calculatedTotalCents)} · 单据 ${draft.invoiceTotalCents == null ? '未识别' : formatRm(draft.invoiceTotalCents!)}',
                     style: const TextStyle(fontWeight: FontWeight.w800),
                   ),
+                  if (draft.originalImagePath.isNotEmpty)
+                    const Text(
+                      'Original 已保留；OCR 使用 Original，画面使用 Preview。',
+                      style: TextStyle(fontSize: 12, color: CnkhColors.muted),
+                    ),
                   TextButton.icon(
                     onPressed: _busy ? null : _editFees,
                     icon: const Icon(Icons.edit),
