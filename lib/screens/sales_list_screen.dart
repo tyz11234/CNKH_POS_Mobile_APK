@@ -98,25 +98,6 @@ class _SalesListScreenState extends State<SalesListScreen> {
     await _load();
   }
 
-  bool _match(SaleRecord s, String q) {
-    if (_from != null) {
-      final sold = DateTime.tryParse(s.soldAt);
-      if (sold != null && sold.isBefore(_from!)) return false;
-    }
-    if (_to != null) {
-      final sold = DateTime.tryParse(s.soldAt);
-      final end = DateTime(_to!.year, _to!.month, _to!.day, 23, 59, 59);
-      if (sold != null && sold.isAfter(end)) return false;
-    }
-    if (q.isEmpty) return true;
-    final phone = (s.customerPhone ?? '').toLowerCase();
-    final name = (s.customerName ?? '').toLowerCase();
-    return s.receiptNo.toLowerCase().contains(q) ||
-        phone.contains(q) ||
-        name.contains(q) ||
-        s.paymentMethod.toLowerCase().contains(q);
-  }
-
   Future<void> _pickFrom() async {
     final d = await showDatePicker(
       context: context,

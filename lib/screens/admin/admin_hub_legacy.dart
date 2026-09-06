@@ -911,8 +911,7 @@ class _AuditLogPageState extends State<AuditLogPage> {
                               style: const TextStyle(fontWeight: FontWeight.w700),
                             ),
                             subtitle: Text(
-                              '${a.occurredAt.replaceFirst('T', ' ').substring(0, 19)}
-'
+                              '${a.occurredAt.replaceFirst('T', ' ').substring(0, 19)}\n'
                               '${a.username} (${a.role})  ${a.oldValue} → ${a.newValue}'
                               '${a.reason.isEmpty ? '' : ' · ${a.reason}'}',
                             ),
