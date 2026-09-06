@@ -112,7 +112,7 @@ Future<void> _queueOcrOriginalAttachment(
       // same Purchase transaction.
       'entity_id': purchaseId,
       'payload_json': jsonEncode(<String, Object?>{
-        'id': attachmentId,
+        'attachment_id': attachmentId,
         'purchase_id': purchaseId,
         'kind': 'invoice_original',
         'filename': file.uri.pathSegments.isEmpty
