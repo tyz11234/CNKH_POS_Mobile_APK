@@ -5,6 +5,7 @@ import 'package:cnkh_pos_mobile/db/app_database.dart';
 import 'package:cnkh_pos_mobile/models/product.dart';
 import 'package:cnkh_pos_mobile/services/pos_repository.dart';
 import 'package:cnkh_pos_mobile/services/purchase_history_sync.dart';
+import 'package:cnkh_pos_mobile/services/purchase_ocr_repository.dart';
 import 'package:cnkh_pos_mobile/services/sync_store.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -108,17 +109,37 @@ void main() {
       expect(first.supported, isTrue);
       expect(first.changed, 1);
 
+      const localPurchaseId = 'pc-p-desktop-purchase-1';
       var purchases = await db.query(
         'purchases',
         where: 'id=?',
-        whereArgs: ['desktop-purchase-1'],
+        whereArgs: [localPurchaseId],
       );
       expect(purchases, hasLength(1));
+      expect(purchases.single['source'], 'desktop_sync');
       expect(purchases.single['supplier_id'], 'local-s1');
       final lines = jsonDecode(purchases.single['lines_json'] as String) as List;
       expect((lines.single as Map)['productId'], 'local-p1');
       expect((await repo.getProduct('local-p1'))!.stock, 10);
       expect(await db.query('stock_moves'), isEmpty);
+
+      // A Desktop-origin history mirror may not run the Mobile inventory reverse
+      // algorithm. The DB trigger aborts the transaction, so even code that
+      // bypasses the UI cannot double-adjust stock.
+      await expectLater(
+        PurchaseOcrRepository(repo).reversePurchase(
+          purchaseId: localPurchaseId,
+          operator: 'admin',
+          reason: 'should be blocked',
+        ),
+        throwsA(anything),
+      );
+      expect((await repo.getProduct('local-p1'))!.stock, 10);
+      expect(await db.query('stock_moves'), isEmpty);
+      expect(
+        await db.query('purchase_reversals', where: 'purchase_id=?', whereArgs: [localPurchaseId]),
+        isEmpty,
+      );
 
       final second = await sync.pullFromSavedDesktop();
       expect(second.changed, 1);
@@ -136,7 +157,7 @@ void main() {
       final reversal = await db.query(
         'purchase_reversals',
         where: 'purchase_id=?',
-        whereArgs: ['desktop-purchase-1'],
+        whereArgs: [localPurchaseId],
       );
       expect(reversal, hasLength(1));
       expect(reversal.single['reason'], 'corrected');
