@@ -1,9 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 import 'dart:math';
 
-import 'package:cryptography/cryptography.dart';
 import 'package:http/http.dart' as http;
 import 'package:sqflite/sqflite.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
@@ -121,7 +119,6 @@ class LanSyncClient {
   Future<String> pullSales(LanSyncConfig cfg) => synchronize(cfg);
   Future<String> pushSales(LanSyncConfig cfg) => _mutex.run(() async {
     await _drainPending(cfg);
-    await _pushPurchaseAttachments(cfg);
     return '待同步操作已上传';
   });
   Future<String> synchronize(
@@ -144,7 +141,6 @@ class LanSyncClient {
       throw StateError('请先更新电脑端，手机待同步数据已保留');
     }
     await _drainPending(cfg);
-    await _pushPurchaseAttachments(cfg);
     final cursor = (h['cursor'] as num?)?.toInt();
     for (final key in ['lan_sync_products_cursor', 'lan_sync_sales_cursor']) {
       if (full ||
@@ -220,95 +216,6 @@ class LanSyncClient {
     }
   }
 
-  Future<int> _pushPurchaseAttachments(LanSyncConfig cfg) async {
-    final d = await _db.db;
-    List<Map<String, Object?>> rows;
-    try {
-      rows = await d.query(
-        'purchase_attachments',
-        where: "kind='invoice_original' AND sync_status<>'synced'",
-        orderBy: 'created_at ASC',
-        limit: 5,
-      );
-    } catch (_) {
-      return 0;
-    }
-    var pushed = 0;
-    for (final row in rows) {
-      final attachmentId = row['id']?.toString() ?? '';
-      try {
-        final purchaseId = row['purchase_id']?.toString() ?? '';
-        final localPath = row['local_path']?.toString() ?? '';
-        if (attachmentId.isEmpty || purchaseId.isEmpty || localPath.isEmpty) {
-          throw StateError('附件资料不完整');
-        }
-        final file = File(localPath);
-        if (!await file.exists()) throw StateError('原始单据文件不存在');
-        final bytes = await file.readAsBytes();
-        if (bytes.isEmpty || bytes.length > 20 * 1024 * 1024) {
-          throw StateError('原始单据文件无效或超过 20MB');
-        }
-        final hash = _hex((await Sha256().hash(bytes)).bytes);
-        final opId = 'purchase_attachment:$attachmentId';
-        final res = await http
-            .post(
-              Uri.parse('${cfg.normalizedBase}/api/v1/mutations'),
-              headers: _headers(cfg),
-              body: jsonEncode({
-                'operations': [
-                  {
-                    'id': opId,
-                    'kind': 'purchase_attachment',
-                    'payload': {
-                      'attachment_id': attachmentId,
-                      'purchase_id': purchaseId,
-                      'kind': row['kind']?.toString() ?? 'invoice_original',
-                      'filename': file.uri.pathSegments.isEmpty
-                          ? 'invoice'
-                          : file.uri.pathSegments.last,
-                      'content_hash': hash,
-                      'base64': base64Encode(bytes),
-                      'created_at': row['created_at']?.toString() ??
-                          DateTime.now().toIso8601String(),
-                    },
-                  },
-                ],
-              }),
-            )
-            .timeout(const Duration(seconds: 60));
-        final body =
-            jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
-        if (body['ok'] != true ||
-            !(body['acknowledged'] as List? ?? []).contains(opId)) {
-          throw StateError('${body['error'] ?? '附件未获电脑确认'}');
-        }
-        await d.update(
-          'purchase_attachments',
-          {
-            'content_hash': hash,
-            'sync_status': 'synced',
-            'synced_at': DateTime.now().toIso8601String(),
-            'last_error': '',
-          },
-          where: 'id=?',
-          whereArgs: [attachmentId],
-        );
-        pushed++;
-      } catch (e) {
-        if (attachmentId.isNotEmpty) {
-          await d.update(
-            'purchase_attachments',
-            {'sync_status': 'error', 'last_error': '$e'},
-            where: 'id=?',
-            whereArgs: [attachmentId],
-          );
-        }
-        lastError = '$e';
-      }
-    }
-    return pushed;
-  }
-
   Map<String, String> _headers(LanSyncConfig cfg) {
     final h = <String, String>{'Content-Type': 'application/json'};
     if (cfg.token.trim().isNotEmpty) {
@@ -351,15 +258,6 @@ class LanSyncClient {
 
   Future<int> countUnsyncedSales() async {
     final d = await _db.db;
-    var attachmentCount = 0;
-    try {
-      attachmentCount = Sqflite.firstIntValue(
-            await d.rawQuery(
-              "SELECT COUNT(*) FROM purchase_attachments WHERE kind='invoice_original' AND sync_status<>'synced'",
-            ),
-          ) ??
-          0;
-    } catch (_) {}
     final n =
         Sqflite.firstIntValue(
           await d.rawQuery(
@@ -367,7 +265,7 @@ class LanSyncClient {
           ),
         ) ??
         0;
-    return n + attachmentCount;
+    return n;
   }
 
   Future<String> _pullCatalog(LanSyncConfig cfg) async {
@@ -1240,9 +1138,6 @@ class LanSyncClient {
 
   Future<String> fullSync(LanSyncConfig cfg) => forceReconcile(cfg);
 }
-
-String _hex(List<int> bytes) =>
-    bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
 
 class LanLiveSync {
   LanLiveSync(this.client);
