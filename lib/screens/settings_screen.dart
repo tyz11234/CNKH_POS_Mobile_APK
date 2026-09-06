@@ -136,13 +136,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
         token: _syncToken.text.trim(),
       );
 
-  Future<void> _saveSyncCfg() async {
-    await widget.repo.setSetting('lan_sync_host', _syncHost.text.trim());
-    await widget.repo.setSetting('lan_sync_token', _syncToken.text.trim());
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('同步地址已保存 / Sync endpoint saved')),
-    );
+  Future<void> _saveSyncCfg({bool rethrowErrors = false}) async {
+    try {
+      await LanSyncClient(widget.repo).saveConfig(_cfg);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('同步地址已保存 / Sync endpoint saved')),
+      );
+    } catch (e) {
+      if (rethrowErrors) rethrow;
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('$e'), backgroundColor: CnkhColors.danger),
+      );
+    }
   }
 
   Future<void> _runSync(Future<String> Function(LanSyncClient c) op) async {
@@ -158,7 +165,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
     setState(() => _syncBusy = true);
     try {
-      await _saveSyncCfg();
+      await _saveSyncCfg(rethrowErrors: true);
       final client = LanSyncClient(widget.repo);
       final msg = await op(client);
       final last = await widget.repo.getSetting('lan_sync_last_full');
