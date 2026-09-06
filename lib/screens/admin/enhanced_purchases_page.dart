@@ -5,9 +5,13 @@ import '../../models/app_user.dart';
 import '../../models/money.dart';
 import '../../models/product.dart';
 import '../../services/pos_repository.dart';
+import '../../services/purchase_history_sync.dart';
+import '../../services/purchase_invoice_parser.dart';
 import '../../services/purchase_ocr_repository.dart';
 import '../../widgets/money_text.dart';
+import 'desktop_purchase_history_page.dart';
 import 'purchase_ocr_screen.dart';
+import 'supplier_aliases_page.dart';
 
 class EnhancedPurchasesPage extends StatefulWidget {
   final PosRepository repo;
@@ -26,6 +30,8 @@ class EnhancedPurchasesPage extends StatefulWidget {
 class _EnhancedPurchasesPageState extends State<EnhancedPurchasesPage> {
   List<Map<String, Object?>> _rows = [];
   List<Map<String, Object?>> _drafts = [];
+  String? _historySyncError;
+  static const _invoiceParser = PurchaseInvoiceParser();
 
   PurchaseOcrRepository get _ocrRepo => PurchaseOcrRepository(widget.repo);
 
@@ -36,9 +42,27 @@ class _EnhancedPurchasesPageState extends State<EnhancedPurchasesPage> {
   }
 
   Future<void> _load() async {
+    String? syncError;
+    try {
+      await PurchaseHistorySync(widget.repo).pullFromSavedDesktop();
+    } catch (e) {
+      syncError = '进货历史同步失败：$e';
+    }
     _rows = await widget.repo.listPurchases();
     _drafts = await _ocrRepo.listDrafts();
-    if (mounted) setState(() {});
+    if (mounted) {
+      setState(() {
+        _historySyncError = syncError;
+      });
+    }
+  }
+
+  Future<void> _openAliases() async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (_) => SupplierAliasesPage(repo: widget.repo),
+      ),
+    );
   }
 
   Future<void> _openDrafts() async {
@@ -180,15 +204,28 @@ class _EnhancedPurchasesPageState extends State<EnhancedPurchasesPage> {
   Future<void> _createManual() async {
     final suppliers = await widget.repo.listSuppliers();
     final products = await widget.repo.searchProducts('', limit: 50);
-    if (!mounted || suppliers.isEmpty || products.isEmpty) return;
+    if (!mounted) return;
+    if (suppliers.isEmpty || products.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('请先建立至少一个供应商和商品')),
+      );
+      return;
+    }
+
     var supplier = suppliers.first;
     var product = products.first;
     final qty = TextEditingController(text: '10');
     final cost = TextEditingController(
       text: centsToRm(product.costCents).toStringAsFixed(2),
     );
+    String? qtyError;
+    String? costError;
+    double? validQty;
+    int? validUnitCost;
+
     final ok = await showDialog<bool>(
       context: context,
+      barrierDismissible: false,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setLocal) => AlertDialog(
           title: const Text('简易进货 / Simple purchase'),
@@ -214,17 +251,32 @@ class _EnhancedPurchasesPageState extends State<EnhancedPurchasesPage> {
                 onChanged: (v) => setLocal(() {
                   product = v!;
                   cost.text = centsToRm(product.costCents).toStringAsFixed(2);
+                  costError = null;
                 }),
               ),
               TextField(
                 controller: qty,
-                decoration: const InputDecoration(labelText: '数量'),
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
+                onChanged: (_) {
+                  if (qtyError != null) setLocal(() => qtyError = null);
+                },
+                decoration: InputDecoration(
+                  labelText: '数量',
+                  errorText: qtyError,
+                ),
               ),
               TextField(
                 controller: cost,
-                decoration: const InputDecoration(
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
+                onChanged: (_) {
+                  if (costError != null) setLocal(() => costError = null);
+                },
+                decoration: InputDecoration(
                   labelText: '成本 RM',
                   prefixText: 'RM ',
+                  errorText: costError,
                 ),
               ),
             ],
@@ -235,17 +287,46 @@ class _EnhancedPurchasesPageState extends State<EnhancedPurchasesPage> {
               child: const Text('取消'),
             ),
             FilledButton(
-              onPressed: () => Navigator.pop(ctx, true),
+              onPressed: () {
+                final q = double.tryParse(
+                  qty.text.trim().replaceAll(',', '.'),
+                );
+                final unitCost = _invoiceParser.parseMoneyCents(cost.text);
+                var invalid = false;
+                if (q == null || !q.isFinite || q <= 0) {
+                  qtyError = '数量必须是大于 0 的有效数字';
+                  invalid = true;
+                }
+                if (unitCost == null || unitCost < 0) {
+                  costError = '请输入有效金额，例如 12.50 或 1,234.56';
+                  invalid = true;
+                }
+                if (invalid) {
+                  setLocal(() {});
+                  return;
+                }
+                validQty = q;
+                validUnitCost = unitCost;
+                Navigator.pop(ctx, true);
+              },
               child: const Text('保存'),
             ),
           ],
         ),
       ),
     );
-    if (ok != true) return;
-    final q = double.tryParse(qty.text.trim()) ?? 0;
-    final unitCost = rmToCents(double.tryParse(cost.text.trim()) ?? 0);
+
+    if (ok != true) {
+      qty.dispose();
+      cost.dispose();
+      return;
+    }
+    final q = validQty!;
+    final unitCost = validUnitCost!;
     final total = (unitCost * q).round();
+    qty.dispose();
+    cost.dispose();
+
     await widget.repo.createPurchase(
       supplierId: supplier.id,
       supplierName: supplier.name,
@@ -270,6 +351,11 @@ class _EnhancedPurchasesPageState extends State<EnhancedPurchasesPage> {
       appBar: AppBar(
         title: const Text('进货 / Purchases'),
         actions: [
+          IconButton(
+            onPressed: _openAliases,
+            tooltip: '供应商商品记忆 / Aliases',
+            icon: const Icon(Icons.memory_outlined),
+          ),
           if (_drafts.isNotEmpty)
             IconButton(
               onPressed: _openDrafts,
@@ -286,35 +372,70 @@ class _EnhancedPurchasesPageState extends State<EnhancedPurchasesPage> {
           ),
         ],
       ),
-      body: ListView.builder(
-        itemCount: _rows.length,
-        itemBuilder: (context, i) {
-          final row = _rows[i];
-          return ListTile(
-            title: Text('${row['purchase_no']} · ${row['supplier_name']}'),
-            subtitle: Text(
-              '${row['purchased_at']}'
-              '${row['source'] == 'ocr' ? ' · OCR' : ''}'
-              '${row['reversed'] == 1 ? ' · 已撤销' : ''}',
-            ),
-            trailing: MoneyText(
-              amountCents: (row['total_cents'] as num).toInt(),
-              fontSize: 14,
-            ),
-            onTap: () async {
-              final changed = await Navigator.of(context).push<bool>(
-                MaterialPageRoute(
-                  builder: (_) => PurchaseDetailScreen(
-                    repo: widget.repo,
-                    user: widget.user,
-                    purchaseId: row['id'] as String,
-                  ),
+      body: Column(
+        children: [
+          if (_historySyncError != null)
+            Material(
+              color: const Color(0xFFFFECEC),
+              child: ListTile(
+                dense: true,
+                leading: const Icon(Icons.sync_problem),
+                title: Text(_historySyncError!),
+                trailing: TextButton(
+                  onPressed: _load,
+                  child: const Text('重试'),
                 ),
-              );
-              if (changed == true) await _load();
-            },
-          );
-        },
+              ),
+            ),
+          Expanded(
+            child: RefreshIndicator(
+              onRefresh: _load,
+              child: ListView.builder(
+                physics: const AlwaysScrollableScrollPhysics(),
+                itemCount: _rows.length,
+                itemBuilder: (context, i) {
+                  final row = _rows[i];
+                  final desktopHistory = row['source'] == 'desktop_sync';
+                  return ListTile(
+                    title: Text('${row['purchase_no']} · ${row['supplier_name']}'),
+                    subtitle: Text(
+                      '${row['purchased_at']}'
+                      '${row['source'] == 'ocr' ? ' · OCR' : ''}'
+                      '${desktopHistory ? ' · Desktop' : ''}'
+                      '${row['reversed'] == 1 ? ' · 已撤销' : ''}',
+                    ),
+                    trailing: MoneyText(
+                      amountCents: (row['total_cents'] as num).toInt(),
+                      fontSize: 14,
+                    ),
+                    onTap: () async {
+                      if (desktopHistory) {
+                        await Navigator.of(context).push<void>(
+                          MaterialPageRoute(
+                            builder: (_) => DesktopPurchaseHistoryPage(
+                              purchase: row,
+                            ),
+                          ),
+                        );
+                        return;
+                      }
+                      final changed = await Navigator.of(context).push<bool>(
+                        MaterialPageRoute(
+                          builder: (_) => PurchaseDetailScreen(
+                            repo: widget.repo,
+                            user: widget.user,
+                            purchaseId: row['id'] as String,
+                          ),
+                        ),
+                      );
+                      if (changed == true) await _load();
+                    },
+                  );
+                },
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

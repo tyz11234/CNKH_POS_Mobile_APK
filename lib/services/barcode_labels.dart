@@ -4,6 +4,7 @@ import 'dart:ui' as ui;
 
 import 'package:barcode/barcode.dart';
 import 'package:flutter/material.dart';
+import 'package:image/image.dart' as img;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
@@ -12,7 +13,8 @@ import '../models/product.dart';
 import 'pos_repository.dart';
 
 /// Generate barcode PNG with **full product name under the bars**.
-/// Uses Flutter canvas so CJK names render (system fonts).
+/// Android keeps the Share Sheet workflow, while the renderer uses deterministic
+/// raster bars so exported labels contain a real scannable barcode.
 class BarcodeLabelService {
   BarcodeLabelService(this.repo);
   final PosRepository repo;
@@ -20,11 +22,14 @@ class BarcodeLabelService {
   Barcode _codecFor(String code) {
     final digits = code.replaceAll(RegExp(r'\D'), '');
     if ((digits.length == 12 || digits.length == 13) && digits == code) {
-      try {
-        return Barcode.ean13();
-      } catch (_) {}
+      final ean = Barcode.ean13();
+      if (ean.isValid(code)) return ean;
     }
-    return Barcode.code128();
+    final code128 = Barcode.code128();
+    if (!code128.isValid(code)) {
+      throw StateError('不支持的条码内容 / Unsupported barcode value');
+    }
+    return code128;
   }
 
   Future<String> autoGenerateBarcode() async {
@@ -42,8 +47,10 @@ class BarcodeLabelService {
     var code = '$base${checkDigit(base)}';
     var n = 0;
     while (await repo.findByBarcodeOrSku(code) != null && n < 30) {
-      final next =
-          (int.parse(base) + 1 + n).toString().padLeft(12, '0').substring(0, 12);
+      final next = (int.parse(base) + 1 + n)
+          .toString()
+          .padLeft(12, '0')
+          .substring(0, 12);
       base = next;
       code = '$base${checkDigit(base)}';
       n++;
@@ -51,7 +58,56 @@ class BarcodeLabelService {
     return code;
   }
 
-  /// PNG: bars + human-readable code + full product name underneath.
+  Future<ui.Image> _renderBarsImage({
+    required Barcode codec,
+    required String code,
+    required int width,
+    required int height,
+  }) async {
+    final bars = codec
+        .make(
+          code,
+          width: width.toDouble(),
+          height: height.toDouble(),
+          drawText: false,
+        )
+        .whereType<BarcodeBar>()
+        .where((bar) => bar.black)
+        .toList(growable: false);
+    if (bars.isEmpty) {
+      throw StateError('条码生成失败：没有可绘制的黑色条码线条');
+    }
+
+    final raster = img.Image(width: width, height: height, numChannels: 4);
+    img.fill(raster, color: img.ColorRgba8(255, 255, 255, 255));
+    final black = img.ColorRgba8(0, 0, 0, 255);
+    for (final bar in bars) {
+      final x1 = bar.left.floor().clamp(0, width - 1);
+      final y1 = bar.top.floor().clamp(0, height - 1);
+      final x2 = (bar.left + bar.width).ceil().clamp(1, width) - 1;
+      final y2 = (bar.top + bar.height).ceil().clamp(1, height) - 1;
+      if (x2 < x1 || y2 < y1) continue;
+      img.fillRect(
+        raster,
+        x1: x1,
+        y1: y1,
+        x2: x2,
+        y2: y2,
+        color: black,
+      );
+    }
+
+    final png = Uint8List.fromList(img.encodePng(raster));
+    final imageCodec = await ui.instantiateImageCodec(png);
+    try {
+      final frame = await imageCodec.getNextFrame();
+      return frame.image;
+    } finally {
+      imageCodec.dispose();
+    }
+  }
+
+  /// PNG: real bars + human-readable code + full product name underneath.
   Future<Uint8List> renderPng({
     required String barcode,
     required String productName,
@@ -61,41 +117,29 @@ class BarcodeLabelService {
     final code = barcode.trim();
     if (code.isEmpty) throw StateError('barcode empty');
     final name = productName.trim().isEmpty ? code : productName.trim();
-
     final codec = _codecFor(code);
-    final svg = codec.toSvg(
-      code,
-      width: width.toDouble(),
-      height: barHeight.toDouble(),
-      drawText: false,
+    final barsImage = await _renderBarsImage(
+      codec: codec,
+      code: code,
+      width: width,
+      height: barHeight,
     );
-    final rectRe = RegExp(
-      r'<rect[^>]*x="([\d.]+)"[^>]*y="([\d.]+)"[^>]*width="([\d.]+)"[^>]*height="([\d.]+)"',
-    );
-    final rects = <Rect>[];
-    for (final m in rectRe.allMatches(svg)) {
-      rects.add(Rect.fromLTWH(
-        double.parse(m.group(1)!),
-        double.parse(m.group(2)!),
-        double.parse(m.group(3)!),
-        double.parse(m.group(4)!),
-      ));
-    }
 
-    final nameStyle = const TextStyle(
-      color: Colors.black,
-      fontSize: 22,
-      fontWeight: FontWeight.w700,
-      height: 1.25,
-    );
     final namePainter = TextPainter(
-      text: TextSpan(text: name, style: nameStyle),
+      text: TextSpan(
+        text: name,
+        style: const TextStyle(
+          color: Colors.black,
+          fontSize: 22,
+          fontWeight: FontWeight.w700,
+          height: 1.25,
+        ),
+      ),
       textAlign: TextAlign.center,
       textDirection: TextDirection.ltr,
       maxLines: 3,
       ellipsis: '…',
     )..layout(maxWidth: width - 32.0);
-
     final codePainter = TextPainter(
       text: TextSpan(
         text: code,
@@ -111,17 +155,19 @@ class BarcodeLabelService {
 
     final footerH = 12 + codePainter.height + 8 + namePainter.height + 16;
     final height = (barHeight + footerH).ceil();
-
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder);
     canvas.drawRect(
       Rect.fromLTWH(0, 0, width.toDouble(), height.toDouble()),
       Paint()..color = Colors.white,
     );
-    final barPaint = Paint()..color = Colors.black;
-    for (final r in rects) {
-      canvas.drawRect(r, barPaint);
-    }
+    canvas.drawImage(
+      barsImage,
+      Offset.zero,
+      Paint()
+        ..isAntiAlias = false
+        ..filterQuality = FilterQuality.none,
+    );
     var y = barHeight + 12.0;
     codePainter.paint(canvas, Offset((width - codePainter.width) / 2, y));
     y += codePainter.height + 8;
@@ -130,6 +176,8 @@ class BarcodeLabelService {
     final picture = recorder.endRecording();
     final image = await picture.toImage(width, height);
     final bd = await image.toByteData(format: ui.ImageByteFormat.png);
+    barsImage.dispose();
+    image.dispose();
     if (bd == null) throw StateError('png encode failed');
     return bd.buffer.asUint8List();
   }
@@ -154,8 +202,7 @@ class BarcodeLabelService {
     final safe = code.replaceAll(RegExp(r'[^\w\-]'), '_');
     final idBit =
         product.id.length >= 8 ? product.id.substring(0, 8) : product.id;
-    final file =
-        File(p.join(dir.path, 'barcode_${safe}_$idBit.png'));
+    final file = File(p.join(dir.path, 'barcode_${safe}_$idBit.png'));
     await file.writeAsBytes(bytes, flush: true);
     return file;
   }

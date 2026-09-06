@@ -2,7 +2,9 @@ import 'package:sqflite/sqflite.dart';
 
 Future<void> ensureOcrPurchaseSchema(DatabaseExecutor db) async {
   final columns = await db.rawQuery('PRAGMA table_info(purchases)');
-  final names = <String>{for (final row in columns) row['name']?.toString() ?? ''};
+  final names = <String>{
+    for (final row in columns) row['name']?.toString() ?? ''
+  };
 
   Future<void> add(String name, String sql) async {
     if (!names.contains(name)) {
@@ -19,6 +21,8 @@ Future<void> ensureOcrPurchaseSchema(DatabaseExecutor db) async {
   await add('other_fee_cents', 'INTEGER NOT NULL DEFAULT 0');
   await add('source', "TEXT NOT NULL DEFAULT 'manual'");
   await add('draft_id', 'TEXT');
+  // image_path is the compressed UI preview. The immutable original is kept as
+  // a purchase attachment so Desktop transfer can be retried independently.
   await add('image_path', "TEXT NOT NULL DEFAULT ''");
   await add('ocr_raw_text', "TEXT NOT NULL DEFAULT ''");
   await add('reversed', 'INTEGER NOT NULL DEFAULT 0');
@@ -35,6 +39,7 @@ CREATE TABLE IF NOT EXISTS purchase_drafts (
   invoice_no TEXT NOT NULL DEFAULT '',
   invoice_date TEXT NOT NULL DEFAULT '',
   image_path TEXT NOT NULL DEFAULT '',
+  original_image_path TEXT NOT NULL DEFAULT '',
   ocr_raw_text TEXT NOT NULL DEFAULT '',
   discount_cents INTEGER NOT NULL DEFAULT 0,
   tax_cents INTEGER NOT NULL DEFAULT 0,
@@ -46,6 +51,18 @@ CREATE TABLE IF NOT EXISTS purchase_drafts (
   created_by TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'draft'
 )''');
+
+  // Defensive compatibility for databases where the OCR tables were created by
+  // an earlier runtime ensure before formal version 8 migration landed.
+  final draftColumns = await db.rawQuery('PRAGMA table_info(purchase_drafts)');
+  final draftNames = <String>{
+    for (final row in draftColumns) row['name']?.toString() ?? ''
+  };
+  if (!draftNames.contains('original_image_path')) {
+    await db.execute(
+      "ALTER TABLE purchase_drafts ADD COLUMN original_image_path TEXT NOT NULL DEFAULT ''",
+    );
+  }
 
   await db.execute('''
 CREATE TABLE IF NOT EXISTS purchase_draft_lines (
@@ -90,9 +107,32 @@ CREATE TABLE IF NOT EXISTS purchase_attachments (
   purchase_id TEXT NOT NULL,
   local_path TEXT NOT NULL,
   kind TEXT NOT NULL DEFAULT 'invoice_image',
+  content_hash TEXT NOT NULL DEFAULT '',
+  sync_status TEXT NOT NULL DEFAULT 'pending',
+  synced_at TEXT,
+  last_error TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
   FOREIGN KEY(purchase_id) REFERENCES purchases(id) ON DELETE CASCADE
 )''');
+
+  final attachmentColumns =
+      await db.rawQuery('PRAGMA table_info(purchase_attachments)');
+  final attachmentNames = <String>{
+    for (final row in attachmentColumns) row['name']?.toString() ?? ''
+  };
+  Future<void> addAttachmentColumn(String name, String sql) async {
+    if (!attachmentNames.contains(name)) {
+      await db.execute(
+        'ALTER TABLE purchase_attachments ADD COLUMN $name $sql',
+      );
+      attachmentNames.add(name);
+    }
+  }
+
+  await addAttachmentColumn('content_hash', "TEXT NOT NULL DEFAULT ''");
+  await addAttachmentColumn('sync_status', "TEXT NOT NULL DEFAULT 'pending'");
+  await addAttachmentColumn('synced_at', 'TEXT');
+  await addAttachmentColumn('last_error', "TEXT NOT NULL DEFAULT ''");
 
   await db.execute('''
 CREATE TABLE IF NOT EXISTS purchase_audit_log (
@@ -119,6 +159,75 @@ CREATE TABLE IF NOT EXISTS purchase_reversals (
   FOREIGN KEY(purchase_id) REFERENCES purchases(id) ON DELETE CASCADE
 )''');
 
+  // Desktop-origin records are history mirrors only. Their inventory has already
+  // been reconciled by catalog sync, so a local reverse must abort the entire
+  // transaction before it can double-adjust stock. A reversal already performed
+  // on Desktop is allowed to mirror because the purchase row is first marked
+  // reversed=1 by PurchaseHistorySync.
+  await db.execute('''
+CREATE TRIGGER IF NOT EXISTS block_local_reverse_of_desktop_purchase
+BEFORE INSERT ON purchase_reversals
+WHEN EXISTS (
+  SELECT 1 FROM purchases
+   WHERE id=NEW.purchase_id
+     AND source='desktop_sync'
+     AND COALESCE(reversed,0)=0
+)
+BEGIN
+  SELECT RAISE(ABORT, 'Desktop synced purchase history cannot be reversed on Mobile');
+END
+''');
+
+  // A draft may be retried after a UI double tap, app restart, timeout or lost ACK.
+  // Reserving the draft id in the same transaction as the stock mutation makes
+  // the commit idempotent without relying on timing in the UI.
+  await db.execute('''
+CREATE TABLE IF NOT EXISTS purchase_commit_keys (
+  draft_id TEXT PRIMARY KEY,
+  purchase_id TEXT NOT NULL,
+  committed_at TEXT NOT NULL
+)''');
+
+  // Backfill keys for OCR purchases made before this table existed. Ignore
+  // duplicate legacy rows rather than deleting or rewriting historical data.
+  await db.execute('''
+INSERT OR IGNORE INTO purchase_commit_keys(draft_id, purchase_id, committed_at)
+SELECT draft_id, id, purchased_at
+FROM purchases
+WHERE draft_id IS NOT NULL AND trim(draft_id) <> ''
+ORDER BY purchased_at ASC
+''');
+
+  // Attachment transfer reuses the existing durable sync_outbox. The normal
+  // LAN client deletes an outbox row only after the Desktop explicitly ACKs the
+  // same operation id. These triggers mirror that state onto the attachment
+  // record without changing the existing sync loop.
+  await db.execute('''
+CREATE TRIGGER IF NOT EXISTS purchase_attachment_outbox_acked
+AFTER DELETE ON sync_outbox
+WHEN OLD.kind='purchase_attachment'
+BEGIN
+  UPDATE purchase_attachments
+     SET sync_status='synced',
+         synced_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+         last_error=''
+   WHERE purchase_id=OLD.entity_id
+     AND kind='invoice_original';
+END
+''');
+  await db.execute('''
+CREATE TRIGGER IF NOT EXISTS purchase_attachment_outbox_failed
+AFTER UPDATE OF last_error ON sync_outbox
+WHEN NEW.kind='purchase_attachment' AND trim(COALESCE(NEW.last_error,''))<>''
+BEGIN
+  UPDATE purchase_attachments
+     SET sync_status='failed',
+         last_error=NEW.last_error
+   WHERE purchase_id=NEW.entity_id
+     AND kind='invoice_original';
+END
+''');
+
   await db.execute(
     'CREATE INDEX IF NOT EXISTS idx_purchase_drafts_status ON purchase_drafts(status, created_at)',
   );
@@ -127,5 +236,11 @@ CREATE TABLE IF NOT EXISTS purchase_reversals (
   );
   await db.execute(
     'CREATE INDEX IF NOT EXISTS idx_purchase_audit_purchase ON purchase_audit_log(purchase_id, occurred_at)',
+  );
+  await db.execute(
+    'CREATE INDEX IF NOT EXISTS idx_purchases_supplier_invoice ON purchases(supplier_id, invoice_no, reversed)',
+  );
+  await db.execute(
+    'CREATE INDEX IF NOT EXISTS idx_purchase_attachment_sync ON purchase_attachments(sync_status, created_at)',
   );
 }

@@ -17,6 +17,7 @@ import 'theme/cnkh_theme.dart';
 import 'widgets/e_receipt_actions.dart';
 import 'services/bluetooth_printer.dart';
 import 'services/lan_sync.dart';
+import 'services/purchase_history_sync.dart';
 import 'services/e_receipt.dart';
 import 'screens/barcode_scan_screen.dart';
 
@@ -102,11 +103,13 @@ class _HomeShellState extends State<HomeShell> {
   int _pending = 0;
   int _overdueHolds = 0;
   Timer? _holdPoll;
+  bool _purchaseHistorySyncing = false;
+  DateTime? _lastPurchaseHistorySync;
 
   @override
   void initState() {
     super.initState();
-    _live.onRemoteChange = _bumpData;
+    _live.onRemoteChange = _handleRemoteChange;
     _live.onLowStock = (event) {
       if (!mounted) return;
       final name = (event['name'] ?? event['sku'] ?? '商品').toString();
@@ -212,6 +215,7 @@ class _HomeShellState extends State<HomeShell> {
   Future<void> _forceReconcile() async {
     try {
       final msg = await _live.forceReconcile();
+      await _syncPurchaseHistory(force: true);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('强制全量对账完成\n$msg'), backgroundColor: CnkhColors.success),
@@ -233,6 +237,37 @@ class _HomeShellState extends State<HomeShell> {
         SyncLinkState.pending => const Color(0xFFFFB300),
         SyncLinkState.offline => const Color(0xFF9E9E9E),
       };
+
+  void _handleRemoteChange() {
+    _bumpData();
+    // Purchase History is read-only reconciliation. It never adds stock; the
+    // Desktop catalog remains authoritative for inventory quantities.
+    unawaited(_syncPurchaseHistory());
+  }
+
+  Future<void> _syncPurchaseHistory({bool force = false}) async {
+    if (_purchaseHistorySyncing) return;
+    final now = DateTime.now();
+    final last = _lastPurchaseHistorySync;
+    if (!force && last != null && now.difference(last) < const Duration(seconds: 5)) {
+      return;
+    }
+    _purchaseHistorySyncing = true;
+    try {
+      final result = await PurchaseHistorySync(widget.repo).pullFromSavedDesktop();
+      _lastPurchaseHistorySync = now;
+      await widget.repo.setSetting('lan_sync_last_purchase_error', '');
+      if (result.supported && result.changed > 0 && mounted) {
+        setState(() => _dataEpoch++);
+      }
+    } catch (e) {
+      // Do not mark the main Sale/Catalog link offline for an optional capability,
+      // but persist the error so Purchase admin/reconcile can surface it.
+      await widget.repo.setSetting('lan_sync_last_purchase_error', '$e');
+    } finally {
+      _purchaseHistorySyncing = false;
+    }
+  }
 
   void _bumpData() {
     if (!mounted) return;

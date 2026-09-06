@@ -6,12 +6,12 @@ import '../../theme/cnkh_theme.dart';
 import '../sales_list_screen.dart';
 import 'admin_hub_legacy.dart' as legacy;
 import 'enhanced_purchases_page.dart';
+import 'entities_page.dart';
 import 'products_admin.dart';
 
 export 'admin_hub_legacy.dart'
     show
         DashboardPage,
-        EntitiesPage,
         PurchasesPage,
         StocktakePage,
         UsersPage,
@@ -19,6 +19,7 @@ export 'admin_hub_legacy.dart'
         DailyClosePage,
         MaintenancePage,
         AuditLogPage;
+export 'entities_page.dart' show EntitiesPage;
 
 class AdminHub extends StatelessWidget {
   final AppUser user;
@@ -58,10 +59,16 @@ class AdminHub extends StatelessWidget {
           ),
         ),
       ),
-      _Tile('客户 Customers', Icons.people_outline,
-          () => _open(context, legacy.EntitiesPage(repo: repo, kind: 'customers'))),
-      _Tile('供应商 Suppliers', Icons.local_shipping_outlined,
-          () => _open(context, legacy.EntitiesPage(repo: repo, kind: 'suppliers'))),
+      _Tile(
+        '客户 Customers',
+        Icons.people_outline,
+        () => _open(context, EntitiesPage(repo: repo, kind: 'customers')),
+      ),
+      _Tile(
+        '供应商 Suppliers',
+        Icons.local_shipping_outlined,
+        () => _open(context, EntitiesPage(repo: repo, kind: 'suppliers')),
+      ),
       _Tile(
         '进货 Purchases',
         Icons.shopping_bag_outlined,
@@ -113,8 +120,8 @@ class AdminHub extends StatelessWidget {
           child: Padding(
             padding: EdgeInsets.all(12),
             child: Text(
-              'PC-only（本版不做）：条码标签硬件打印、Windows 备份/还原二进制格式。\n'
-              'PC-only: barcode label hardware printing; Windows backup/restore binary format.',
+              'Windows 专属：条码标签硬件打印、Windows 备份/还原。\n'
+              'Android 保留相机、图库、扫码和 Share Sheet 等移动端交互。',
               style: TextStyle(
                 fontSize: 12,
                 height: 1.4,

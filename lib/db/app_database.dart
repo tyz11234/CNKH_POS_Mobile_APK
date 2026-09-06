@@ -13,6 +13,7 @@ import 'package:sqlite3/open.dart';
 import 'package:uuid/uuid.dart';
 
 import '../models/product.dart';
+import 'ocr_purchase_schema.dart';
 import 'reliability_schema.dart';
 
 /// Local-first SQLite for CNKH POS Mobile (demo / companion).
@@ -20,13 +21,23 @@ class AppDatabase {
   AppDatabase._();
   static final AppDatabase instance = AppDatabase._();
 
-  AppDatabase.forTesting(String path,{bool seed=false}):_testPath=path,_seedData=seed;
+  AppDatabase.forTesting(String path, {bool seed = false})
+      : _testPath = path,
+        _seedData = seed;
   String? _testPath;
-  bool _seedData=true;
+  bool _seedData = true;
   Database? _db;
   Future<Database>? _opening;
-  Future<void> close() async { await _db?.close();_db=null;_opening=null; }
-  Future<Database> get db => _opening ??= _open().catchError((Object e){_opening=null;throw e;});
+  Future<void> close() async {
+    await _db?.close();
+    _db = null;
+    _opening = null;
+  }
+
+  Future<Database> get db => _opening ??= _open().catchError((Object e) {
+        _opening = null;
+        throw e;
+      });
   static bool _ffiReady = false;
 
   static void ensureFfi() {
@@ -63,11 +74,12 @@ class AppDatabase {
   Future<Database> _open() async {
     if (_db != null) return _db!;
     ensureFfi();
-    final dir = _testPath==null?await getApplicationDocumentsDirectory():null;
-    final path = _testPath??p.join(dir!.path, 'cnkh_pos_mobile.db');
+    final dir =
+        _testPath == null ? await getApplicationDocumentsDirectory() : null;
+    final path = _testPath ?? p.join(dir!.path, 'cnkh_pos_mobile.db');
     _db = await openDatabase(
       path,
-      version: 7,
+      version: 8,
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
       onOpen: (db) async {
@@ -214,7 +226,6 @@ CREATE TABLE demo_users (
   is_active INTEGER NOT NULL DEFAULT 1
 )''');
     await db.execute('''
-
 CREATE TABLE audit_logs (
   id TEXT PRIMARY KEY,
   occurred_at TEXT NOT NULL,
@@ -230,11 +241,12 @@ CREATE TABLE audit_logs (
   reason TEXT NOT NULL DEFAULT ''
 )''');
     await ensureReliabilitySchema(db);
-    if(_seedData) await _seed(db);
+    await ensureOcrPurchaseSchema(db);
+    if (_seedData) await _seed(db);
   }
 
   Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
-    if(oldVersion<7) await ensureReliabilitySchema(db);
+    if (oldVersion < 7) await ensureReliabilitySchema(db);
     if (oldVersion < 2) {
       final cols = await db.rawQuery('PRAGMA table_info(sales)');
       final names = <String>{
@@ -284,11 +296,13 @@ CREATE TABLE IF NOT EXISTS categories (
       };
       if (!names5.contains('image_path')) {
         await db.execute(
-            "ALTER TABLE products ADD COLUMN image_path TEXT NOT NULL DEFAULT ''");
+          "ALTER TABLE products ADD COLUMN image_path TEXT NOT NULL DEFAULT ''",
+        );
       }
       if (!names5.contains('reorder_level')) {
         await db.execute(
-            'ALTER TABLE products ADD COLUMN reorder_level REAL NOT NULL DEFAULT 0');
+          'ALTER TABLE products ADD COLUMN reorder_level REAL NOT NULL DEFAULT 0',
+        );
       }
       final cats = await db.rawQuery(
         "SELECT DISTINCT category FROM products WHERE category IS NOT NULL AND trim(category) != '' AND is_deleted=0",
@@ -323,19 +337,27 @@ CREATE TABLE IF NOT EXISTS barcode_print_queue (
   synced_at TEXT
 )''');
     }
+    if (oldVersion < 8) {
+      await ensureOcrPurchaseSchema(db);
+    }
   }
 
   Future<void> _seed(Database db) async {
     final catalogRaw = await rootBundle.loadString('assets/catalog.json');
-    final catalog = (jsonDecode(catalogRaw) as List).cast<Map<String, dynamic>>();
+    final catalog =
+        (jsonDecode(catalogRaw) as List).cast<Map<String, dynamic>>();
     final batch = db.batch();
     for (final j in catalog) {
       final p = Product.fromJson(j);
-      batch.insert('products', p.toMap(),
-          conflictAlgorithm: ConflictAlgorithm.ignore);
+      batch.insert(
+        'products',
+        p.toMap(),
+        conflictAlgorithm: ConflictAlgorithm.ignore,
+      );
     }
     final custRaw = await rootBundle.loadString('assets/seed_customers.json');
-    for (final j in (jsonDecode(custRaw) as List).cast<Map<String, dynamic>>()) {
+    for (final j in
+        (jsonDecode(custRaw) as List).cast<Map<String, dynamic>>()) {
       batch.insert('customers', {
         'id': j['id'],
         'name': j['name'],
@@ -345,7 +367,8 @@ CREATE TABLE IF NOT EXISTS barcode_print_queue (
       }, conflictAlgorithm: ConflictAlgorithm.ignore);
     }
     final supRaw = await rootBundle.loadString('assets/seed_suppliers.json');
-    for (final j in (jsonDecode(supRaw) as List).cast<Map<String, dynamic>>()) {
+    for (final j in
+        (jsonDecode(supRaw) as List).cast<Map<String, dynamic>>()) {
       batch.insert('suppliers', {
         'id': j['id'],
         'name': j['name'],
@@ -356,32 +379,74 @@ CREATE TABLE IF NOT EXISTS barcode_print_queue (
       }, conflictAlgorithm: ConflictAlgorithm.ignore);
     }
     for (final u in [
-      {'id': 'u1', 'username': 'admin', 'display_name': 'Store Admin', 'role': 'ADMIN'},
-      {'id': 'u2', 'username': 'staff', 'display_name': 'Cashier 1', 'role': 'STAFF'},
-      {'id': 'u3', 'username': 'staff2', 'display_name': 'Cashier 2', 'role': 'STAFF'},
+      {
+        'id': 'u1',
+        'username': 'admin',
+        'display_name': 'Store Admin',
+        'role': 'ADMIN'
+      },
+      {
+        'id': 'u2',
+        'username': 'staff',
+        'display_name': 'Cashier 1',
+        'role': 'STAFF'
+      },
+      {
+        'id': 'u3',
+        'username': 'staff2',
+        'display_name': 'Cashier 2',
+        'role': 'STAFF'
+      },
     ]) {
-      batch.insert('demo_users', {...u, 'is_active': 1},
-          conflictAlgorithm: ConflictAlgorithm.ignore);
+      batch.insert(
+        'demo_users',
+        {...u, 'is_active': 1},
+        conflictAlgorithm: ConflictAlgorithm.ignore,
+      );
     }
-    batch.insert('settings', {'key': 'store_name', 'value': '黄金发宝号'},
-        conflictAlgorithm: ConflictAlgorithm.ignore);
-    batch.insert('settings', {'key': 'product_images_enabled', 'value': '0'},
-        conflictAlgorithm: ConflictAlgorithm.ignore);
-    batch.insert('settings', {'key': 'bt_printer_enabled', 'value': '0'},
-        conflictAlgorithm: ConflictAlgorithm.ignore);
-    batch.insert('settings', {'key': 'low_stock_threshold', 'value': '10'},
-        conflictAlgorithm: ConflictAlgorithm.ignore);
+    batch.insert(
+      'settings',
+      {'key': 'store_name', 'value': '黄金发宝号'},
+      conflictAlgorithm: ConflictAlgorithm.ignore,
+    );
+    batch.insert(
+      'settings',
+      {'key': 'product_images_enabled', 'value': '0'},
+      conflictAlgorithm: ConflictAlgorithm.ignore,
+    );
+    batch.insert(
+      'settings',
+      {'key': 'bt_printer_enabled', 'value': '0'},
+      conflictAlgorithm: ConflictAlgorithm.ignore,
+    );
+    batch.insert(
+      'settings',
+      {'key': 'low_stock_threshold', 'value': '10'},
+      conflictAlgorithm: ConflictAlgorithm.ignore,
+    );
     await batch.commit(noResult: true);
   }
 
   Future<void> clearDemoTransactionalData() async {
     final d = await db;
     await d.transaction((txn) async {
-      await txn.delete('sales');
-      await txn.delete('held_orders');
-      await txn.delete('purchases');
-      await txn.delete('stock_moves');
-      await txn.delete('daily_closings');
+      for (final table in [
+        'purchase_attachments',
+        'purchase_audit_log',
+        'purchase_reversals',
+        'purchase_commit_keys',
+        'purchase_draft_lines',
+        'purchase_drafts',
+        'sales',
+        'held_orders',
+        'purchases',
+        'stock_moves',
+        'daily_closings',
+      ]) {
+        try {
+          await txn.delete(table);
+        } catch (_) {}
+      }
     });
   }
 
@@ -391,8 +456,19 @@ CREATE TABLE IF NOT EXISTS barcode_print_queue (
     final d = await db;
     await d.transaction((txn) async {
       // Reset business data without reopening unauthenticated admin setup.
-      await txn.delete('user_credentials', where: 'username<>?', whereArgs: ['admin']);
+      await txn.delete(
+        'user_credentials',
+        where: 'username<>?',
+        whereArgs: ['admin'],
+      );
       for (final table in [
+        'purchase_attachments',
+        'purchase_audit_log',
+        'purchase_reversals',
+        'purchase_commit_keys',
+        'purchase_draft_lines',
+        'purchase_drafts',
+        'supplier_product_aliases',
         'sync_entity_ids',
         'sync_outbox',
         'sync_applied_operations',
@@ -445,8 +521,11 @@ CREATE TABLE IF NOT EXISTS barcode_print_queue (
   }
 
   Future<String> nextReceiptNo({DatabaseExecutor? executor}) async {
-    final d=executor??await db;
-    final day = DateTime.now().toIso8601String().substring(0, 10).replaceAll('-', '');
+    final d = executor ?? await db;
+    final day = DateTime.now()
+        .toIso8601String()
+        .substring(0, 10)
+        .replaceAll('-', '');
     final device = await _mobileDeviceCode(d);
     final prefix = 'P$day-$device-';
     final rows = await d.rawQuery(

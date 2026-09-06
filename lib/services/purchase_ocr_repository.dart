@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:sqflite/sqflite.dart';
 
@@ -177,6 +178,52 @@ class PurchaseOcrRepository {
     return rows.isEmpty ? null : rows.first;
   }
 
+  Future<List<Map<String, Object?>>> listAliases({String? supplierId}) async {
+    final db = await _db();
+    return db.query(
+      'supplier_product_aliases',
+      where: supplierId == null ? null : 'supplier_id=?',
+      whereArgs: supplierId == null ? null : [supplierId],
+      orderBy: 'last_used_at DESC',
+    );
+  }
+
+  Future<void> deleteAlias(String aliasId) async {
+    final db = await _db();
+    await db.delete(
+      'supplier_product_aliases',
+      where: 'id=?',
+      whereArgs: [aliasId],
+    );
+  }
+
+  Future<void> updateAlias({
+    required String aliasId,
+    required String productId,
+    required String unit,
+    required double conversionFactor,
+  }) async {
+    if (!conversionFactor.isFinite || conversionFactor <= 0) {
+      throw ArgumentError('换算倍率必须是大于 0 的有效数字');
+    }
+    final product = await posRepo.getProduct(productId);
+    if (product == null || product.isDeleted != 0) {
+      throw StateError('目标商品不存在或已删除');
+    }
+    final db = await _db();
+    await db.update(
+      'supplier_product_aliases',
+      {
+        'product_id': productId,
+        'unit': unit.trim().isEmpty ? 'pcs' : unit.trim(),
+        'conversion_factor': conversionFactor,
+        'last_used_at': DateTime.now().toIso8601String(),
+      },
+      where: 'id=?',
+      whereArgs: [aliasId],
+    );
+  }
+
   Future<PurchaseHistorySample> historyForProduct(String productId) async {
     final db = await _db();
     final rows = await db.rawQuery(
@@ -190,10 +237,10 @@ class PurchaseOcrRepository {
         for (final raw in lines) {
           final line = Map<String, dynamic>.from(raw as Map);
           if (line['productId']?.toString() != productId) continue;
-          final qty = (line['invoiceQty'] as num?)?.toDouble() ??
-              (line['qty'] as num?)?.toDouble();
-          final cost = (line['invoiceUnitCostCents'] as num?)?.toInt() ??
-              (line['unitCostCents'] as num?)?.toInt();
+          final qty = (line['qty'] as num?)?.toDouble() ??
+              (line['invoiceQty'] as num?)?.toDouble();
+          final cost = (line['unitCostCents'] as num?)?.toInt() ??
+              (line['invoiceUnitCostCents'] as num?)?.toInt();
           if (qty != null && qty > 0) quantities.add(qty);
           lastCost ??= cost;
         }
@@ -226,13 +273,16 @@ class PurchaseOcrRepository {
           'invoice_no': draft.invoiceNo,
           'invoice_date': draft.invoiceDate,
           'image_path': draft.imagePath,
+          'original_image_path': draft.originalImagePath,
           'ocr_raw_text': draft.ocrRawText,
           'discount_cents': draft.discountCents,
           'tax_cents': draft.taxCents,
           'delivery_fee_cents': draft.deliveryFeeCents,
           'other_fee_cents': draft.otherFeeCents,
           'invoice_total_cents': draft.invoiceTotalCents,
-          'warnings_json': jsonEncode(draft.warnings.map((w) => w.toMap()).toList()),
+          'warnings_json': jsonEncode(
+            draft.warnings.map((w) => w.toMap()).toList(),
+          ),
           'created_at': draft.createdAt,
           'created_by': draft.createdBy,
           'status': draft.status,
@@ -263,7 +313,9 @@ class PurchaseOcrRepository {
           'original_unit_cost_cents': line.originalUnitCostCents,
           'original_line_subtotal_cents': line.originalLineSubtotalCents,
           'conversion_factor': line.conversionFactor,
-          'warnings_json': jsonEncode(line.warnings.map((w) => w.toMap()).toList()),
+          'warnings_json': jsonEncode(
+            line.warnings.map((w) => w.toMap()).toList(),
+          ),
           'user_modified': line.userModified ? 1 : 0,
         });
       }
@@ -338,6 +390,7 @@ class PurchaseOcrRepository {
       invoiceNo: row['invoice_no'] as String? ?? '',
       invoiceDate: row['invoice_date'] as String? ?? '',
       imagePath: row['image_path'] as String? ?? '',
+      originalImagePath: row['original_image_path'] as String? ?? '',
       ocrRawText: row['ocr_raw_text'] as String? ?? '',
       lines: lines,
       discountCents: (row['discount_cents'] as num?)?.toInt() ?? 0,
@@ -353,22 +406,152 @@ class PurchaseOcrRepository {
     );
   }
 
-  Future<String> commitDraft(PurchaseDraft original, {required String operator}) async {
+  Future<void> _deleteFileIfExists(String path) async {
+    if (path.trim().isEmpty) return;
+    final file = File(path);
+    if (await file.exists()) await file.delete();
+  }
+
+  Future<void> deleteDraft(String draftId) async {
+    final db = await _db();
+    final rows = await db.query(
+      'purchase_drafts',
+      where: 'id=?',
+      whereArgs: [draftId],
+      limit: 1,
+    );
+    if (rows.isEmpty) return;
+    final row = rows.first;
+    if ((row['status']?.toString() ?? 'draft') != 'draft') {
+      throw StateError('已入库的 Purchase 不可当作草稿删除');
+    }
+    final previewPath = row['image_path']?.toString() ?? '';
+    final originalPath = row['original_image_path']?.toString() ?? '';
+    await db.transaction((txn) async {
+      await txn.delete(
+        'purchase_draft_lines',
+        where: 'draft_id=?',
+        whereArgs: [draftId],
+      );
+      await txn.delete(
+        'purchase_drafts',
+        where: 'id=? AND status=?',
+        whereArgs: [draftId, 'draft'],
+      );
+    });
+    await _deleteFileIfExists(previewPath);
+    if (originalPath != previewPath) await _deleteFileIfExists(originalPath);
+  }
+
+  Future<Map<String, Object?>?> findDuplicateInvoice(
+    String supplierId,
+    String invoiceNo,
+  ) async {
+    final normalized = invoiceNo.trim();
+    if (supplierId.trim().isEmpty || normalized.isEmpty) return null;
+    final db = await _db();
+    final rows = await db.rawQuery(
+      '''SELECT id, purchase_no, purchased_at, total_cents
+         FROM purchases
+         WHERE supplier_id=?
+           AND lower(trim(invoice_no))=lower(trim(?))
+           AND COALESCE(reversed,0)=0
+         ORDER BY purchased_at DESC
+         LIMIT 1''',
+      [supplierId, normalized],
+    );
+    return rows.isEmpty ? null : rows.first;
+  }
+
+  Future<String> commitDraft(
+    PurchaseDraft original, {
+    required String operator,
+    bool allowDuplicateInvoice = false,
+    String duplicateOverrideReason = '',
+  }) async {
     final draft = await validateDraft(original);
     if (draft.hasBlockingIssues) {
       throw StateError('仍有未匹配商品或无效数据，不能直接入库');
     }
+    for (final line in draft.lines) {
+      if (!line.conversionFactor.isFinite || line.conversionFactor <= 0) {
+        throw StateError('换算倍率必须是大于 0 的有效数字，不能入库');
+      }
+      if (!line.stockQuantity.isFinite || line.stockQuantity <= 0) {
+        throw StateError('换算后的库存数量无效，不能入库');
+      }
+    }
+    if (allowDuplicateInvoice && duplicateOverrideReason.trim().isEmpty) {
+      throw ArgumentError('重复 Invoice 强制入库必须填写原因');
+    }
+
     final db = await _db();
+    final alreadyCommitted = await db.query(
+      'purchase_commit_keys',
+      columns: ['purchase_id'],
+      where: 'draft_id=?',
+      whereArgs: [draft.draftId],
+      limit: 1,
+    );
+    if (alreadyCommitted.isNotEmpty) {
+      return alreadyCommitted.first['purchase_id']!.toString();
+    }
+    final legacyCommitted = await db.query(
+      'purchases',
+      columns: ['id'],
+      where: 'draft_id=?',
+      whereArgs: [draft.draftId],
+      limit: 1,
+    );
+    if (legacyCommitted.isNotEmpty) {
+      return legacyCommitted.first['id']!.toString();
+    }
+
     await saveDraft(draft);
     final purchaseId = AppDatabase.newId();
     final purchaseNo = await _database.nextPurchaseNo();
     final now = DateTime.now().toIso8601String();
     final totalCents = draft.invoiceTotalCents ?? draft.calculatedTotalCents;
 
-    await db.transaction((txn) async {
+    return db.transaction<String>((txn) async {
+      final committed = await txn.query(
+        'purchase_commit_keys',
+        columns: ['purchase_id'],
+        where: 'draft_id=?',
+        whereArgs: [draft.draftId],
+        limit: 1,
+      );
+      if (committed.isNotEmpty) {
+        return committed.first['purchase_id']!.toString();
+      }
+
+      final invoiceNo = draft.invoiceNo.trim();
+      if (invoiceNo.isNotEmpty) {
+        final duplicates = await txn.rawQuery(
+          '''SELECT id, purchase_no FROM purchases
+             WHERE supplier_id=?
+               AND lower(trim(invoice_no))=lower(trim(?))
+               AND COALESCE(reversed,0)=0
+             LIMIT 1''',
+          [draft.supplierId, invoiceNo],
+        );
+        if (duplicates.isNotEmpty && !allowDuplicateInvoice) {
+          throw StateError('该供应商的 Invoice No 已经入库，已阻止重复入库。');
+        }
+      }
+
+      await txn.insert('purchase_commit_keys', {
+        'draft_id': draft.draftId,
+        'purchase_id': purchaseId,
+        'committed_at': now,
+      });
+
       final localLines = <Map<String, Object?>>[];
       final remoteLines = <Map<String, Object?>>[];
       for (final line in draft.lines) {
+        if (!line.conversionFactor.isFinite || line.conversionFactor <= 0) {
+          throw StateError('换算倍率必须是大于 0 的有效数字，不能入库');
+        }
         final productId = line.matchedProductId!;
         final rows = await txn.query(
           'products',
@@ -376,10 +559,16 @@ class PurchaseOcrRepository {
           whereArgs: [productId],
           limit: 1,
         );
-        if (rows.isEmpty) throw StateError('进货商品已不存在：${line.matchedProductName}');
-        final beforeCost = (rows.first['cost_cents'] as num?)?.toInt() ?? 0;
+        if (rows.isEmpty) {
+          throw StateError('进货商品已不存在：${line.matchedProductName}');
+        }
+        final beforeCost =
+            (rows.first['cost_cents'] as num?)?.toInt() ?? 0;
         final stockQty = line.stockQuantity;
         final baseCost = line.baseUnitCostCents;
+        if (!stockQty.isFinite || stockQty <= 0) {
+          throw StateError('换算后的库存数量无效，不能入库');
+        }
         final local = <String, Object?>{
           'productId': productId,
           'name': line.matchedProductName,
@@ -408,7 +597,8 @@ class PurchaseOcrRepository {
         'id': purchaseId,
         'purchase_no': purchaseNo,
         'purchased_at': now,
-        'supplier_id': await remoteEntityId(txn, 'supplier', draft.supplierId!),
+        'supplier_id':
+            await remoteEntityId(txn, 'supplier', draft.supplierId!),
         'supplier_name': draft.supplierName,
         'invoice_no': draft.invoiceNo,
         'invoice_date': draft.invoiceDate,
@@ -466,6 +656,8 @@ class PurchaseOcrRepository {
           'operator': operator,
           'notes': purchaseNo,
         });
+        // Alias memory is written only after the human confirms the structured
+        // draft. OCR raw text alone never creates a permanent stock mapping.
         await _rememberAlias(
           txn,
           supplierId: draft.supplierId!,
@@ -495,12 +687,25 @@ class PurchaseOcrRepository {
         }
       }
 
+      if (draft.originalImagePath.isNotEmpty) {
+        await txn.insert('purchase_attachments', {
+          'id': AppDatabase.newId(),
+          'purchase_id': purchaseId,
+          'local_path': draft.originalImagePath,
+          'kind': 'invoice_original',
+          'content_hash': '',
+          'sync_status': 'pending',
+          'created_at': now,
+        });
+      }
       if (draft.imagePath.isNotEmpty) {
         await txn.insert('purchase_attachments', {
           'id': AppDatabase.newId(),
           'purchase_id': purchaseId,
           'local_path': draft.imagePath,
-          'kind': 'invoice_image',
+          'kind': 'invoice_preview',
+          'content_hash': '',
+          'sync_status': 'local_only',
           'created_at': now,
         });
       }
@@ -516,14 +721,28 @@ class PurchaseOcrRepository {
         'final_value': '$totalCents',
         'details': 'invoice=${draft.invoiceNo}; warnings=${draft.warnings.length}',
       });
+      if (allowDuplicateInvoice) {
+        await txn.insert('purchase_audit_log', {
+          'id': AppDatabase.newId(),
+          'purchase_id': purchaseId,
+          'draft_id': draft.draftId,
+          'occurred_at': now,
+          'username': operator,
+          'action': 'duplicate_invoice_override',
+          'field_name': 'invoice_no',
+          'original_value': draft.invoiceNo,
+          'final_value': draft.invoiceNo,
+          'details': duplicateOverrideReason.trim(),
+        });
+      }
       await txn.update(
         'purchase_drafts',
         {'status': 'committed'},
         where: 'id=?',
         whereArgs: [draft.draftId],
       );
+      return purchaseId;
     });
-    return purchaseId;
   }
 
   Future<void> _rememberAlias(
@@ -563,7 +782,8 @@ class PurchaseOcrRepository {
           'product_id': productId,
           'unit': unit,
           'conversion_factor': conversionFactor,
-          'use_count': ((existing.first['use_count'] as num?)?.toInt() ?? 0) + 1,
+          'use_count':
+              ((existing.first['use_count'] as num?)?.toInt() ?? 0) + 1,
           'last_used_at': now,
         },
         where: 'id=?',
@@ -574,7 +794,12 @@ class PurchaseOcrRepository {
 
   Future<Map<String, Object?>?> getPurchase(String id) async {
     final db = await _db();
-    final rows = await db.query('purchases', where: 'id=?', whereArgs: [id], limit: 1);
+    final rows = await db.query(
+      'purchases',
+      where: 'id=?',
+      whereArgs: [id],
+      limit: 1,
+    );
     return rows.isEmpty ? null : rows.first;
   }
 
@@ -605,6 +830,9 @@ class PurchaseOcrRepository {
       );
       if (rows.isEmpty) throw StateError('进货记录不存在');
       final purchase = rows.first;
+      if (purchase['source']?.toString() == 'desktop_sync') {
+        throw StateError('该进货由 Desktop 建立，请在 Desktop 撤销；Mobile 这里只同步历史记录。');
+      }
       if (purchase['reversed'] == 1) return;
       if ((await txn.query(
         'purchase_reversals',
@@ -616,7 +844,11 @@ class PurchaseOcrRepository {
       final lines = (jsonDecode(purchase['lines_json'] as String) as List)
           .map((e) => Map<String, dynamic>.from(e as Map))
           .toList();
+      final purchasedAt = purchase['purchased_at']?.toString() ?? '';
+      final purchaseNo = purchase['purchase_no']?.toString() ?? '';
       final now = DateTime.now().toIso8601String();
+      final planned = <Map<String, Object?>>[];
+
       for (final line in lines) {
         final productId = line['productId']?.toString() ?? '';
         final qty = (line['qty'] as num?)?.toDouble() ?? 0;
@@ -629,19 +861,67 @@ class PurchaseOcrRepository {
           whereArgs: [productId],
           limit: 1,
         );
-        if (productRows.isEmpty) throw StateError('原进货商品已不存在，无法撤销');
-        final currentCost = (productRows.first['cost_cents'] as num?)?.toInt() ?? 0;
+        if (productRows.isEmpty) {
+          throw StateError('原进货商品已不存在，无法撤销');
+        }
+        final currentStock = (productRows.first['stock'] as num).toDouble();
+        if (!currentStock.isFinite || currentStock + 0.0000001 < qty) {
+          throw StateError(
+            '该进货后的库存已经发生后续变化，无法安全直接撤销，请使用库存调整或人工处理。',
+          );
+        }
+
+        final moves = await txn.query(
+          'stock_moves',
+          columns: ['reason', 'created_at', 'notes'],
+          where: 'product_id=? AND created_at>=?',
+          whereArgs: [productId, purchasedAt],
+          orderBy: 'created_at ASC',
+        );
+        final hasLaterBusinessMove = moves.any((move) {
+          final isOwnPurchaseMove =
+              move['created_at']?.toString() == purchasedAt &&
+              move['reason']?.toString() == 'purchase' &&
+              move['notes']?.toString() == purchaseNo;
+          return !isOwnPurchaseMove;
+        });
+        if (hasLaterBusinessMove) {
+          throw StateError(
+            '该进货后的库存已经发生后续变化，无法安全直接撤销，请使用库存调整或人工处理。',
+          );
+        }
+
+        final currentCost =
+            (productRows.first['cost_cents'] as num?)?.toInt() ?? 0;
         final purchaseCost = (line['unitCostCents'] as num?)?.toInt();
         final beforeCost = (line['beforeCostCents'] as num?)?.toInt();
+        planned.add({
+          'productId': productId,
+          'qty': qty,
+          'currentStock': currentStock,
+          'restoreCost': purchaseCost != null &&
+                  beforeCost != null &&
+                  currentCost == purchaseCost
+              ? beforeCost
+              : null,
+        });
+      }
+
+      for (final change in planned) {
+        final productId = change['productId']! as String;
+        final qty = change['qty']! as double;
         final update = <String, Object?>{
-          'stock': (productRows.first['stock'] as num).toDouble() - qty,
+          'stock': (change['currentStock']! as double) - qty,
         };
-        if (purchaseCost != null &&
-            beforeCost != null &&
-            currentCost == purchaseCost) {
-          update['cost_cents'] = beforeCost;
+        if (change['restoreCost'] != null) {
+          update['cost_cents'] = change['restoreCost'];
         }
-        await txn.update('products', update, where: 'id=?', whereArgs: [productId]);
+        await txn.update(
+          'products',
+          update,
+          where: 'id=?',
+          whereArgs: [productId],
+        );
         await txn.insert('stock_moves', {
           'id': AppDatabase.newId(),
           'product_id': productId,
@@ -649,7 +929,7 @@ class PurchaseOcrRepository {
           'reason': 'purchase_reversal',
           'created_at': now,
           'operator': operator,
-          'notes': '${purchase['purchase_no']} · $reason',
+          'notes': '$purchaseNo · $reason',
         });
       }
 

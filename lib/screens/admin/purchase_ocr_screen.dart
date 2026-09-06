@@ -59,6 +59,9 @@ class _PurchaseOcrScreenState extends State<PurchaseOcrScreen> {
   }
 
   Future<void> _start() async {
+    var createdOriginal = '';
+    var createdPreview = '';
+    var persistedDraft = false;
     try {
       _suppliers = await widget.repo.listSuppliers();
       _products = await widget.repo.searchProducts('', limit: 5000);
@@ -76,23 +79,36 @@ class _PurchaseOcrScreenState extends State<PurchaseOcrScreen> {
           return;
         }
         final draftId = AppDatabase.newId();
-        final savedPath = await _imageStore.saveCompressed(picked.path, draftId);
-        final rawText = await _recognizer.recognizeFile(savedPath);
+        final images =
+            await _imageStore.saveOriginalAndPreview(picked.path, draftId);
+        createdOriginal = images.originalPath;
+        createdPreview = images.previewPath;
+
+        // Recognition intentionally uses the byte-for-byte original. Preview is
+        // only for UI display and may be compressed/resized.
+        final rawText = await _recognizer.recognizeFile(images.originalPath);
         draft = _parser.parse(
           rawText,
           draftId: draftId,
           createdBy: widget.user.username,
-          imagePath: savedPath,
-        );
+          imagePath: images.previewPath,
+        ).copyWith(originalImagePath: images.originalPath);
         draft = await _ocrRepo.prepareDraft(draft);
       }
       await _ocrRepo.saveDraft(draft);
+      persistedDraft = true;
       if (!mounted) return;
       setState(() {
         _draft = draft;
         _busy = false;
       });
     } catch (e) {
+      if (!persistedDraft && widget.draftId == null) {
+        await _imageStore.deletePair(
+          originalPath: createdOriginal,
+          previewPath: createdPreview,
+        );
+      }
       if (!mounted) return;
       setState(() {
         _error = '$e';
@@ -124,7 +140,18 @@ class _PurchaseOcrScreenState extends State<PurchaseOcrScreen> {
     final subtotal = TextEditingController(
       text: (line.lineSubtotalCents / 100).toStringAsFixed(2),
     );
-    final conversion = TextEditingController(text: line.conversionFactor.toString());
+    final conversion =
+        TextEditingController(text: line.conversionFactor.toString());
+
+    String? qtyError;
+    String? conversionError;
+    String? costError;
+    String? subtotalError;
+    double? parsedQty;
+    double? parsedConversion;
+    int? parsedCost;
+    int? parsedSubtotal;
+
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => StatefulBuilder(
@@ -158,8 +185,15 @@ class _PurchaseOcrScreenState extends State<PurchaseOcrScreen> {
                   const SizedBox(height: 8),
                   TextField(
                     controller: qty,
-                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                    decoration: const InputDecoration(labelText: '数量 / Qty'),
+                    keyboardType:
+                        const TextInputType.numberWithOptions(decimal: true),
+                    onChanged: (_) {
+                      if (qtyError != null) setLocal(() => qtyError = null);
+                    },
+                    decoration: InputDecoration(
+                      labelText: '数量 / Qty',
+                      errorText: qtyError,
+                    ),
                   ),
                   TextField(
                     controller: unit,
@@ -167,26 +201,45 @@ class _PurchaseOcrScreenState extends State<PurchaseOcrScreen> {
                   ),
                   TextField(
                     controller: conversion,
-                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                    decoration: const InputDecoration(
+                    keyboardType:
+                        const TextInputType.numberWithOptions(decimal: true),
+                    onChanged: (_) {
+                      if (conversionError != null) {
+                        setLocal(() => conversionError = null);
+                      }
+                    },
+                    decoration: InputDecoration(
                       labelText: '换算倍率 / Conversion',
                       helperText: '普通单件保持 1；例如 1 CTN = 24 PCS 时填 24',
+                      errorText: conversionError,
                     ),
                   ),
                   TextField(
                     controller: cost,
-                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                    decoration: const InputDecoration(
+                    keyboardType:
+                        const TextInputType.numberWithOptions(decimal: true),
+                    onChanged: (_) {
+                      if (costError != null) setLocal(() => costError = null);
+                    },
+                    decoration: InputDecoration(
                       labelText: 'OCR 单位成本',
                       prefixText: 'RM ',
+                      errorText: costError,
                     ),
                   ),
                   TextField(
                     controller: subtotal,
-                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                    decoration: const InputDecoration(
+                    keyboardType:
+                        const TextInputType.numberWithOptions(decimal: true),
+                    onChanged: (_) {
+                      if (subtotalError != null) {
+                        setLocal(() => subtotalError = null);
+                      }
+                    },
+                    decoration: InputDecoration(
                       labelText: 'OCR 行小计',
                       prefixText: 'RM ',
+                      errorText: subtotalError,
                     ),
                   ),
                 ],
@@ -199,7 +252,40 @@ class _PurchaseOcrScreenState extends State<PurchaseOcrScreen> {
               child: const Text('取消'),
             ),
             FilledButton(
-              onPressed: () => Navigator.pop(ctx, true),
+              onPressed: () {
+                final q = double.tryParse(qty.text.trim());
+                final c = double.tryParse(conversion.text.trim());
+                final unitCost = _parser.parseMoneyCents(cost.text.trim());
+                final lineSubtotal =
+                    _parser.parseMoneyCents(subtotal.text.trim());
+                final nextQtyError = q == null || !q.isFinite || q <= 0
+                    ? '数量必须是大于 0 的有效数字'
+                    : null;
+                final nextConversionError =
+                    c == null || !c.isFinite || c <= 0
+                        ? '换算倍率必须是大于 0 的有效数字'
+                        : null;
+                final nextCostError = unitCost == null ? '金额格式错误' : null;
+                final nextSubtotalError =
+                    lineSubtotal == null ? '金额格式错误' : null;
+                if (nextQtyError != null ||
+                    nextConversionError != null ||
+                    nextCostError != null ||
+                    nextSubtotalError != null) {
+                  setLocal(() {
+                    qtyError = nextQtyError;
+                    conversionError = nextConversionError;
+                    costError = nextCostError;
+                    subtotalError = nextSubtotalError;
+                  });
+                  return;
+                }
+                parsedQty = q;
+                parsedConversion = c;
+                parsedCost = unitCost;
+                parsedSubtotal = lineSubtotal;
+                Navigator.pop(ctx, true);
+              },
               child: const Text('保存'),
             ),
           ],
@@ -212,13 +298,11 @@ class _PurchaseOcrScreenState extends State<PurchaseOcrScreen> {
       matchedProductId: product.id,
       matchedProductName: product.nameZh,
       matchConfidence: 1,
-      quantity: double.tryParse(qty.text.trim()) ?? line.quantity,
+      quantity: parsedQty!,
       unit: unit.text.trim().isEmpty ? line.unit : unit.text.trim(),
-      conversionFactor:
-          double.tryParse(conversion.text.trim()) ?? line.conversionFactor,
-      unitCostCents: rmToCents(double.tryParse(cost.text.trim()) ?? 0),
-      lineSubtotalCents:
-          rmToCents(double.tryParse(subtotal.text.trim()) ?? 0),
+      conversionFactor: parsedConversion!,
+      unitCostCents: parsedCost!,
+      lineSubtotalCents: parsedSubtotal!,
       userModified: true,
     );
     final lines = [...draft.lines]..[index] = nextLine;
@@ -239,42 +323,139 @@ class _PurchaseOcrScreenState extends State<PurchaseOcrScreen> {
     );
     final no = TextEditingController(text: draft.invoiceNo);
     final date = TextEditingController(text: draft.invoiceDate);
+
+    String? discountError;
+    String? taxError;
+    String? deliveryError;
+    String? otherError;
+    String? invoiceError;
+    int parsedDiscount = draft.discountCents;
+    int parsedTax = draft.taxCents;
+    int parsedDelivery = draft.deliveryFeeCents;
+    int parsedOther = draft.otherFeeCents;
+    int? parsedInvoice = draft.invoiceTotalCents;
+
+    int? parseFee(TextEditingController controller) {
+      final text = controller.text.trim();
+      if (text.isEmpty) return 0;
+      return _parser.parseMoneyCents(text);
+    }
+
     final ok = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('单据金额 / Invoice totals'),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: no,
-                decoration: const InputDecoration(labelText: 'Invoice No'),
-              ),
-              TextField(
-                controller: date,
-                decoration: const InputDecoration(
-                  labelText: 'Invoice Date (YYYY-MM-DD)',
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setLocal) => AlertDialog(
+          title: const Text('单据金额 / Invoice totals'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: no,
+                  decoration: const InputDecoration(labelText: 'Invoice No'),
                 ),
-              ),
-              _moneyField(discount, 'Discount'),
-              _moneyField(tax, 'Tax / SST'),
-              _moneyField(delivery, 'Delivery / Freight'),
-              _moneyField(other, 'Other Fee'),
-              _moneyField(invoice, 'Invoice Total'),
-            ],
+                TextField(
+                  controller: date,
+                  decoration: const InputDecoration(
+                    labelText: 'Invoice Date (YYYY-MM-DD)',
+                  ),
+                ),
+                _moneyField(
+                  discount,
+                  'Discount',
+                  errorText: discountError,
+                  onChanged: (_) {
+                    if (discountError != null) {
+                      setLocal(() => discountError = null);
+                    }
+                  },
+                ),
+                _moneyField(
+                  tax,
+                  'Tax / SST',
+                  errorText: taxError,
+                  onChanged: (_) {
+                    if (taxError != null) setLocal(() => taxError = null);
+                  },
+                ),
+                _moneyField(
+                  delivery,
+                  'Delivery / Freight',
+                  errorText: deliveryError,
+                  onChanged: (_) {
+                    if (deliveryError != null) {
+                      setLocal(() => deliveryError = null);
+                    }
+                  },
+                ),
+                _moneyField(
+                  other,
+                  'Other Fee',
+                  errorText: otherError,
+                  onChanged: (_) {
+                    if (otherError != null) setLocal(() => otherError = null);
+                  },
+                ),
+                _moneyField(
+                  invoice,
+                  'Invoice Total',
+                  errorText: invoiceError,
+                  onChanged: (_) {
+                    if (invoiceError != null) {
+                      setLocal(() => invoiceError = null);
+                    }
+                  },
+                ),
+              ],
+            ),
           ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () {
+                final d = parseFee(discount);
+                final t = parseFee(tax);
+                final deliveryValue = parseFee(delivery);
+                final o = parseFee(other);
+                final invoiceText = invoice.text.trim();
+                final inv = invoiceText.isEmpty
+                    ? null
+                    : _parser.parseMoneyCents(invoiceText);
+                final nextDiscountError = d == null ? '金额格式错误' : null;
+                final nextTaxError = t == null ? '金额格式错误' : null;
+                final nextDeliveryError =
+                    deliveryValue == null ? '金额格式错误' : null;
+                final nextOtherError = o == null ? '金额格式错误' : null;
+                final nextInvoiceError =
+                    invoiceText.isNotEmpty && inv == null ? '金额格式错误' : null;
+                if (nextDiscountError != null ||
+                    nextTaxError != null ||
+                    nextDeliveryError != null ||
+                    nextOtherError != null ||
+                    nextInvoiceError != null) {
+                  setLocal(() {
+                    discountError = nextDiscountError;
+                    taxError = nextTaxError;
+                    deliveryError = nextDeliveryError;
+                    otherError = nextOtherError;
+                    invoiceError = nextInvoiceError;
+                  });
+                  return;
+                }
+                parsedDiscount = d!;
+                parsedTax = t!;
+                parsedDelivery = deliveryValue!;
+                parsedOther = o!;
+                parsedInvoice = inv;
+                Navigator.pop(ctx, true);
+              },
+              child: const Text('保存'),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('保存'),
-          ),
-        ],
       ),
     );
     if (ok != true) return;
@@ -282,13 +463,12 @@ class _PurchaseOcrScreenState extends State<PurchaseOcrScreen> {
       _draft = draft.copyWith(
         invoiceNo: no.text.trim(),
         invoiceDate: date.text.trim(),
-        discountCents: _parseMoney(discount),
-        taxCents: _parseMoney(tax),
-        deliveryFeeCents: _parseMoney(delivery),
-        otherFeeCents: _parseMoney(other),
-        invoiceTotalCents:
-            invoice.text.trim().isEmpty ? null : _parseMoney(invoice),
-        clearInvoiceTotal: invoice.text.trim().isEmpty,
+        discountCents: parsedDiscount,
+        taxCents: parsedTax,
+        deliveryFeeCents: parsedDelivery,
+        otherFeeCents: parsedOther,
+        invoiceTotalCents: parsedInvoice,
+        clearInvoiceTotal: parsedInvoice == null,
       );
     });
     await _revalidate();
@@ -297,14 +477,22 @@ class _PurchaseOcrScreenState extends State<PurchaseOcrScreen> {
   TextEditingController _moneyCtrl(int cents) =>
       TextEditingController(text: (cents / 100).toStringAsFixed(2));
 
-  Widget _moneyField(TextEditingController c, String label) => TextField(
+  Widget _moneyField(
+    TextEditingController c,
+    String label, {
+    String? errorText,
+    ValueChanged<String>? onChanged,
+  }) =>
+      TextField(
         controller: c,
         keyboardType: const TextInputType.numberWithOptions(decimal: true),
-        decoration: InputDecoration(labelText: label, prefixText: 'RM '),
+        onChanged: onChanged,
+        decoration: InputDecoration(
+          labelText: label,
+          prefixText: 'RM ',
+          errorText: errorText,
+        ),
       );
-
-  int _parseMoney(TextEditingController c) =>
-      rmToCents(double.tryParse(c.text.trim()) ?? 0);
 
   Future<void> _selectSupplier(String? id) async {
     if (id == null) return;
@@ -318,60 +506,213 @@ class _PurchaseOcrScreenState extends State<PurchaseOcrScreen> {
     await _revalidate();
   }
 
-  Future<void> _confirm() async {
-    await _revalidate();
-    final draft = _draft!;
-    if (draft.hasBlockingIssues) {
+  Future<String?> _duplicateOverrideReason(
+    PurchaseDraft draft,
+    Map<String, Object?> duplicate,
+  ) async {
+    if (!widget.user.isAdmin) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('请先处理红色错误和未匹配商品，OCR 不会直接入库。'),
+          SnackBar(
+            content: Text(
+              '重复 Invoice 已阻止。已存在 ${duplicate['purchase_no'] ?? duplicate['id']}；只有 Admin 可强制入库。',
+            ),
           ),
         );
       }
-      return;
+      return null;
     }
-    final warnings = [
-      ...draft.warnings,
-      ...draft.lines.expand((l) => l.warnings),
-    ].where((w) => w.level == PurchaseWarningLevel.warning).toList();
-    if (warnings.isNotEmpty) {
-      final ok = await showDialog<bool>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('仍有警告，确认入库？'),
-          content: SizedBox(
-            width: 520,
-            child: ListView(
-              shrinkWrap: true,
-              children: warnings
-                  .take(12)
-                  .map((w) => Text('• ${w.message}'))
-                  .toList(),
-            ),
+
+    final reason = TextEditingController();
+    String? reasonError;
+    final first = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setLocal) => AlertDialog(
+          title: const Text('发现重复 Invoice'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                '供应商 ${draft.supplierName} 的 Invoice ${draft.invoiceNo} 已经入库。\n'
+                '已有记录：${duplicate['purchase_no'] ?? duplicate['id']}\n'
+                '再次入库会再次增加库存。',
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: reason,
+                maxLines: 2,
+                onChanged: (_) {
+                  if (reasonError != null) setLocal(() => reasonError = null);
+                },
+                decoration: InputDecoration(
+                  labelText: '强制入库原因 / Override reason',
+                  errorText: reasonError,
+                ),
+              ),
+            ],
           ),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('继续检查'),
+              child: const Text('取消'),
             ),
             FilledButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('确认入库'),
+              onPressed: () {
+                if (reason.text.trim().isEmpty) {
+                  setLocal(() => reasonError = '必须填写原因');
+                  return;
+                }
+                Navigator.pop(ctx, true);
+              },
+              child: const Text('仍然入库 / Force Commit'),
             ),
           ],
         ),
-      );
-      if (ok != true) return;
-    }
+      ),
+    );
+    if (first != true) return null;
+
+    final second = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('再次确认强制重复入库'),
+        content: const Text(
+          '这会创建另一笔 Purchase 并再次增加库存。系统会记录管理员、Invoice 和 Override 原因。确定继续吗？',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('返回'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('确认强制入库'),
+          ),
+        ],
+      ),
+    );
+    return second == true ? reason.text.trim() : null;
+  }
+
+  Future<void> _confirm() async {
+    if (_busy) return;
     setState(() => _busy = true);
+    var committed = false;
     try {
-      await _ocrRepo.commitDraft(draft, operator: widget.user.username);
+      await _revalidate();
+      final draft = _draft!;
+      if (draft.hasBlockingIssues) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('请先处理红色错误和未匹配商品，OCR 不会直接入库。'),
+            ),
+          );
+        }
+        return;
+      }
+      final warnings = [
+        ...draft.warnings,
+        ...draft.lines.expand((l) => l.warnings),
+      ].where((w) => w.level == PurchaseWarningLevel.warning).toList();
+      if (warnings.isNotEmpty) {
+        final ok = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('仍有警告，确认入库？'),
+            content: SizedBox(
+              width: 520,
+              child: ListView(
+                shrinkWrap: true,
+                children: warnings
+                    .take(12)
+                    .map((w) => Text('• ${w.message}'))
+                    .toList(),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('继续检查'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('确认入库'),
+              ),
+            ],
+          ),
+        );
+        if (ok != true) return;
+      }
+
+      var allowDuplicate = false;
+      var duplicateReason = '';
+      final duplicate = await _ocrRepo.findDuplicateInvoice(
+        draft.supplierId!,
+        draft.invoiceNo,
+      );
+      if (duplicate != null) {
+        final reason = await _duplicateOverrideReason(draft, duplicate);
+        if (reason == null) return;
+        allowDuplicate = true;
+        duplicateReason = reason;
+      }
+
+      await _ocrRepo.commitDraft(
+        draft,
+        operator: widget.user.username,
+        allowDuplicateInvoice: allowDuplicate,
+        duplicateOverrideReason: duplicateReason,
+      );
+      committed = true;
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('OCR 进货已确认入库')),
       );
       Navigator.pop(context, true);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('$e')),
+      );
+    } finally {
+      if (!committed && mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _deleteDraft() async {
+    final draft = _draft;
+    if (draft == null || _busy) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('删除 OCR 草稿？'),
+        content: const Text(
+          '只会删除这份尚未入库的草稿、草稿商品行和未 Commit 的 Original/Preview 图片，不会影响任何已入库 Purchase。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('确认删除'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    setState(() => _busy = true);
+    try {
+      await _ocrRepo.deleteDraft(draft.draftId);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('OCR 草稿已删除')),
+      );
+      Navigator.pop(context, false);
     } catch (e) {
       if (!mounted) return;
       setState(() => _busy = false);
@@ -461,14 +802,19 @@ class _PurchaseOcrScreenState extends State<PurchaseOcrScreen> {
         title: const Text('OCR 进货 / OCR Purchase'),
         actions: [
           IconButton(
-            onPressed: _showRawText,
+            onPressed: _busy ? null : _showRawText,
             tooltip: 'OCR 原文',
             icon: const Icon(Icons.text_snippet_outlined),
           ),
           IconButton(
-            onPressed: _editFees,
+            onPressed: _busy ? null : _editFees,
             tooltip: '单据金额',
             icon: const Icon(Icons.calculate_outlined),
+          ),
+          IconButton(
+            onPressed: _busy ? null : _deleteDraft,
+            tooltip: '删除草稿',
+            icon: const Icon(Icons.delete_outline),
           ),
         ],
       ),
@@ -534,7 +880,7 @@ class _PurchaseOcrScreenState extends State<PurchaseOcrScreen> {
                       for (final s in _suppliers)
                         DropdownMenuItem(value: s.id, child: Text(s.name)),
                     ],
-                    onChanged: _selectSupplier,
+                    onChanged: _busy ? null : _selectSupplier,
                   ),
                   const SizedBox(height: 8),
                   Text(
@@ -556,8 +902,13 @@ class _PurchaseOcrScreenState extends State<PurchaseOcrScreen> {
                     '系统计算 ${formatRm(draft.calculatedTotalCents)} · 单据 ${draft.invoiceTotalCents == null ? '未识别' : formatRm(draft.invoiceTotalCents!)}',
                     style: const TextStyle(fontWeight: FontWeight.w800),
                   ),
+                  if (draft.originalImagePath.isNotEmpty)
+                    const Text(
+                      'Original 已保留；OCR 使用 Original，画面使用 Preview。',
+                      style: TextStyle(fontSize: 12, color: CnkhColors.muted),
+                    ),
                   TextButton.icon(
-                    onPressed: _editFees,
+                    onPressed: _busy ? null : _editFees,
                     icon: const Icon(Icons.edit),
                     label: const Text('核对单据编号、日期和费用'),
                   ),
@@ -568,7 +919,7 @@ class _PurchaseOcrScreenState extends State<PurchaseOcrScreen> {
           for (final w in draft.warnings) _warningTile(w),
           SwitchListTile(
             value: _onlyExceptions,
-            onChanged: (v) => setState(() => _onlyExceptions = v),
+            onChanged: _busy ? null : (v) => setState(() => _onlyExceptions = v),
             title: const Text('只看异常 / Exceptions only'),
           ),
           ...visible.map((entry) {
@@ -582,7 +933,7 @@ class _PurchaseOcrScreenState extends State<PurchaseOcrScreen> {
                 product == null ? null : product.stock + line.stockQuantity;
             return Card(
               child: InkWell(
-                onTap: () => _editLine(entry.key),
+                onTap: _busy ? null : () => _editLine(entry.key),
                 child: Padding(
                   padding: const EdgeInsets.all(12),
                   child: Column(

@@ -73,8 +73,10 @@ class ProductMatchService {
         ));
         continue;
       }
-      final score = [similarity(target, zh), similarity(target, en)]
-          .reduce((a, b) => a > b ? a : b);
+
+      final zhScore = _specAwareSimilarity(target, zh);
+      final enScore = _specAwareSimilarity(target, en);
+      final score = zhScore > enScore ? zhScore : enScore;
       if (score >= 0.45) {
         candidates.add(ProductMatchCandidate(
           product: product,
@@ -85,6 +87,30 @@ class ProductMatchService {
     }
     candidates.sort((a, b) => b.confidence.compareTo(a.confidence));
     return candidates.take(limit).toList();
+  }
+
+  double _specAwareSimilarity(String a, String b) {
+    final base = similarity(a, b);
+    final aSpecs = _specTokens(a);
+    final bSpecs = _specTokens(b);
+    if (aSpecs.isNotEmpty &&
+        bSpecs.isNotEmpty &&
+        aSpecs.intersection(bSpecs).isEmpty) {
+      // Names such as "Coca Cola 500ML" and "Coca Cola 1.5L" are visually
+      // similar but must not be trusted as the same SKU. Keep the candidate
+      // visible for manual review while pushing it below auto-match threshold.
+      return (base * 0.45).clamp(0.0, 1.0).toDouble();
+    }
+    return base;
+  }
+
+  Set<String> _specTokens(String normalized) {
+    final compact = normalized.replaceAll(' ', '');
+    final matches = RegExp(
+      r'\d+(?:\.\d+)?(?:ml|l|kg|g|pcs|pc|pack|carton|bottle)',
+      caseSensitive: false,
+    ).allMatches(compact);
+    return matches.map((m) => m.group(0)!.toLowerCase()).toSet();
   }
 
   double similarity(String a, String b) {
