@@ -237,8 +237,14 @@ class LanSyncClient {
   }
 
   Future<void> saveConfig(LanSyncConfig cfg) async {
-    final old = await repo.getSetting('lan_sync_token');
-    if (old.isNotEmpty && old != cfg.token) {
+    final oldToken = await repo.getSetting('lan_sync_token');
+    final oldHost = await repo.getSetting('lan_sync_host');
+    final normalizedOldHost = oldHost.trim().isEmpty
+        ? ''
+        : LanSyncConfig(baseUrl: oldHost).normalizedBase;
+    final sameHost = normalizedOldHost.isNotEmpty &&
+        normalizedOldHost == cfg.normalizedBase;
+    if (oldToken.isNotEmpty && oldToken != cfg.token && !sameHost) {
       throw StateError('已有门店数据，请先同步并备份后再切换门店');
     }
     await repo.setSetting('lan_sync_host', cfg.normalizedBase);
