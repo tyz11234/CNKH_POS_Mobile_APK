@@ -10,13 +10,51 @@ import 'package:cnkh_pos_mobile/services/sync_store.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  test('Desktop purchase history pull is idempotent and never mutates stock', () async {
+  test('Desktop purchase history pull is incremental and never mutates stock', () async {
     AppDatabase.ensureFfi();
     final dir = await Directory.systemTemp.createTemp('cnkh-purchase-history-');
     final database = AppDatabase.forTesting('${dir.path}/mobile.db', seed: false);
     final repo = PosRepository(database: database);
-    late HttpServer server;
+    HttpServer? server;
     var reversed = 0;
+    var cursor = 100;
+
+    Map<String, Object?> purchasePayload() => <String, Object?>{
+          'pc_id': 'desktop-purchase-1',
+          'purchase_no': 'PO-D-1',
+          'supplier_id': 'desktop-s1',
+          'supplier_name': 'Supplier',
+          'purchased_at': '2026-09-06T12:00:00.000Z',
+          'total_cents': 500,
+          'notes': 'desktop history',
+          'invoice_no': 'INV-D-1',
+          'invoice_date': '2026-09-06',
+          'discount_cents': 0,
+          'tax_cents': 0,
+          'delivery_fee_cents': 0,
+          'other_fee_cents': 0,
+          'source': 'desktop',
+          'draft_id': null,
+          'ocr_raw_text': '',
+          'reversed': reversed,
+          'reversed_at':
+              reversed == 1 ? '2026-09-06T13:00:00.000Z' : null,
+          'reversed_by': reversed == 1 ? 'admin' : null,
+          'reversal_reason': reversed == 1 ? 'corrected' : '',
+          'reversal_notes': '',
+          'is_deleted': 0,
+          'lines': <Object?>[
+            <String, Object?>{
+              'productId': 'desktop-p1',
+              'name': '商品',
+              'qty': 2.0,
+              'unit': 'pcs',
+              'conversionFactor': 1.0,
+              'unitCostCents': 250,
+              'subtotalCents': 500,
+            },
+          ],
+        };
 
     try {
       final db = await database.db;
@@ -40,60 +78,32 @@ void main() {
       server.listen((request) async {
         if (request.headers.value('X-CNKH-Token') != 'token-1') {
           request.response.statusCode = HttpStatus.unauthorized;
-          request.response.write(jsonEncode({'ok': false, 'error': 'unauthorized'}));
+          request.response.write(
+            jsonEncode(<String, Object?>{'ok': false, 'error': 'unauthorized'}),
+          );
           await request.response.close();
           return;
         }
         request.response.headers.contentType = ContentType.json;
         if (request.uri.path == '/api/v1/health') {
-          request.response.write(jsonEncode({
+          request.response.write(jsonEncode(<String, Object?>{
             'ok': true,
             'protocol': 1,
-            'capabilities': ['purchases_v1'],
+            'capabilities': <String>['purchases_v1'],
           }));
         } else if (request.uri.path == '/api/v1/purchases') {
-          request.response.write(jsonEncode({
+          final since =
+              int.tryParse(request.uri.queryParameters['since'] ?? '') ?? 0;
+          request.response.write(jsonEncode(<String, Object?>{
             'ok': true,
-            'items': [
-              {
-                'pc_id': 'desktop-purchase-1',
-                'purchase_no': 'PO-D-1',
-                'supplier_id': 'desktop-s1',
-                'supplier_name': 'Supplier',
-                'purchased_at': '2026-09-06T12:00:00.000Z',
-                'total_cents': 500,
-                'notes': 'desktop history',
-                'invoice_no': 'INV-D-1',
-                'invoice_date': '2026-09-06',
-                'discount_cents': 0,
-                'tax_cents': 0,
-                'delivery_fee_cents': 0,
-                'other_fee_cents': 0,
-                'source': 'desktop',
-                'draft_id': null,
-                'ocr_raw_text': '',
-                'reversed': reversed,
-                'reversed_at': reversed == 1 ? '2026-09-06T13:00:00.000Z' : null,
-                'reversed_by': reversed == 1 ? 'admin' : null,
-                'reversal_reason': reversed == 1 ? 'corrected' : '',
-                'reversal_notes': '',
-                'lines': [
-                  {
-                    'productId': 'desktop-p1',
-                    'name': '商品',
-                    'qty': 2.0,
-                    'unit': 'pcs',
-                    'conversionFactor': 1.0,
-                    'unitCostCents': 250,
-                    'subtotalCents': 500,
-                  }
-                ],
-              }
-            ],
+            'items': since < cursor
+                ? <Object?>[purchasePayload()]
+                : const <Object?>[],
+            'cursor': cursor,
           }));
         } else {
           request.response.statusCode = HttpStatus.notFound;
-          request.response.write(jsonEncode({'ok': false}));
+          request.response.write(jsonEncode(<String, Object?>{'ok': false}));
         }
         await request.response.close();
       });
@@ -108,12 +118,13 @@ void main() {
       final first = await sync.pullFromSavedDesktop();
       expect(first.supported, isTrue);
       expect(first.changed, 1);
+      expect(await repo.getSetting('lan_sync_purchases_cursor'), '100');
 
       const localPurchaseId = 'pc-p-desktop-purchase-1';
       var purchases = await db.query(
         'purchases',
         where: 'id=?',
-        whereArgs: [localPurchaseId],
+        whereArgs: <Object?>[localPurchaseId],
       );
       expect(purchases, hasLength(1));
       expect(purchases.single['source'], 'desktop_sync');
@@ -124,32 +135,41 @@ void main() {
       expect(await db.query('stock_moves'), isEmpty);
 
       // A Desktop-origin history mirror may not run the Mobile inventory reverse
-      // algorithm. The DB trigger aborts the transaction, so even code that
-      // bypasses the UI cannot double-adjust stock.
+      // algorithm, even if internal code bypasses the read-only UI.
       await expectLater(
         PurchaseOcrRepository(repo).reversePurchase(
           purchaseId: localPurchaseId,
           operator: 'admin',
           reason: 'should be blocked',
         ),
-        throwsA(anything),
+        throwsA(isA<StateError>()),
       );
       expect((await repo.getProduct('local-p1'))!.stock, 10);
       expect(await db.query('stock_moves'), isEmpty);
       expect(
-        await db.query('purchase_reversals', where: 'purchase_id=?', whereArgs: [localPurchaseId]),
+        await db.query(
+          'purchase_reversals',
+          where: 'purchase_id=?',
+          whereArgs: <Object?>[localPurchaseId],
+        ),
         isEmpty,
       );
 
+      // Same cursor is a true no-op.
       final second = await sync.pullFromSavedDesktop();
-      expect(second.changed, 1);
+      expect(second.changed, 0);
       purchases = await db.query('purchases');
       expect(purchases, hasLength(1));
       expect((await repo.getProduct('local-p1'))!.stock, 10);
       expect(await db.query('stock_moves'), isEmpty);
 
+      // Desktop later reverses the purchase. Mobile mirrors the status only;
+      // Desktop/catalog stock remains authoritative and is not subtracted again.
       reversed = 1;
-      await sync.pullFromSavedDesktop();
+      cursor = 101;
+      final third = await sync.pullFromSavedDesktop();
+      expect(third.changed, 1);
+      expect(await repo.getSetting('lan_sync_purchases_cursor'), '101');
       purchases = await db.query('purchases');
       expect(purchases.single['reversed'], 1);
       expect((await repo.getProduct('local-p1'))!.stock, 10);
@@ -157,12 +177,12 @@ void main() {
       final reversal = await db.query(
         'purchase_reversals',
         where: 'purchase_id=?',
-        whereArgs: [localPurchaseId],
+        whereArgs: <Object?>[localPurchaseId],
       );
       expect(reversal, hasLength(1));
       expect(reversal.single['reason'], 'corrected');
     } finally {
-      await server.close(force: true);
+      await server?.close(force: true);
       await database.close();
       await dir.delete(recursive: true);
     }
