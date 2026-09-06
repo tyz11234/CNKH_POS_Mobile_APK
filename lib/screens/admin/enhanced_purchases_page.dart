@@ -5,6 +5,7 @@ import '../../models/app_user.dart';
 import '../../models/money.dart';
 import '../../models/product.dart';
 import '../../services/pos_repository.dart';
+import '../../services/purchase_ocr_repository.dart';
 import '../../widgets/money_text.dart';
 import 'purchase_ocr_screen.dart';
 
@@ -24,6 +25,9 @@ class EnhancedPurchasesPage extends StatefulWidget {
 
 class _EnhancedPurchasesPageState extends State<EnhancedPurchasesPage> {
   List<Map<String, Object?>> _rows = [];
+  List<Map<String, Object?>> _drafts = [];
+
+  PurchaseOcrRepository get _ocrRepo => PurchaseOcrRepository(widget.repo);
 
   @override
   void initState() {
@@ -33,7 +37,73 @@ class _EnhancedPurchasesPageState extends State<EnhancedPurchasesPage> {
 
   Future<void> _load() async {
     _rows = await widget.repo.listPurchases();
+    _drafts = await _ocrRepo.listDrafts();
     if (mounted) setState(() {});
+  }
+
+  Future<void> _openDrafts() async {
+    final drafts = await _ocrRepo.listDrafts();
+    if (!mounted) return;
+    if (drafts.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('没有未完成的 OCR 草稿')),
+      );
+      return;
+    }
+    final draftId = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: SizedBox(
+          height: MediaQuery.sizeOf(ctx).height * 0.55,
+          child: Column(
+            children: [
+              const ListTile(
+                title: Text(
+                  '未完成 OCR 草稿',
+                  style: TextStyle(fontWeight: FontWeight.w800),
+                ),
+                subtitle: Text('点选后继续核对；草稿不会影响库存。'),
+              ),
+              Expanded(
+                child: ListView.separated(
+                  itemCount: drafts.length,
+                  separatorBuilder: (_, __) => const Divider(height: 1),
+                  itemBuilder: (context, i) {
+                    final d = drafts[i];
+                    final supplier = (d['supplier_name']?.toString() ?? '').trim();
+                    final invoice = (d['invoice_no']?.toString() ?? '').trim();
+                    return ListTile(
+                      leading: const Icon(Icons.description_outlined),
+                      title: Text(
+                        supplier.isEmpty ? '未选择供应商' : supplier,
+                      ),
+                      subtitle: Text(
+                        '${invoice.isEmpty ? '未识别 Invoice No' : invoice}\n${d['created_at'] ?? ''}',
+                      ),
+                      isThreeLine: true,
+                      trailing: const Icon(Icons.chevron_right),
+                      onTap: () => Navigator.pop(ctx, d['id'] as String),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (!mounted || draftId == null) return;
+    final committed = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) => PurchaseOcrScreen(
+          repo: widget.repo,
+          user: widget.user,
+          draftId: draftId,
+        ),
+      ),
+    );
+    if (committed == true) await _load();
   }
 
   Future<void> _chooseCreate() async {
@@ -45,8 +115,10 @@ class _EnhancedPurchasesPageState extends State<EnhancedPurchasesPage> {
           mainAxisSize: MainAxisSize.min,
           children: [
             const ListTile(
-              title: Text('新增进货 / New Purchase',
-                  style: TextStyle(fontWeight: FontWeight.w800)),
+              title: Text(
+                '新增进货 / New Purchase',
+                style: TextStyle(fontWeight: FontWeight.w800),
+              ),
               subtitle: Text('OCR 只生成草稿，核对并确认后才会更新库存。'),
             ),
             ListTile(
@@ -61,6 +133,13 @@ class _EnhancedPurchasesPageState extends State<EnhancedPurchasesPage> {
               subtitle: const Text('本机离线 OCR · Gallery'),
               onTap: () => Navigator.pop(ctx, 'gallery'),
             ),
+            if (_drafts.isNotEmpty)
+              ListTile(
+                leading: const Icon(Icons.drafts_outlined),
+                title: Text('继续 OCR 草稿 (${_drafts.length})'),
+                subtitle: const Text('继续之前未确认的进货单'),
+                onTap: () => Navigator.pop(ctx, 'drafts'),
+              ),
             ListTile(
               leading: const Icon(Icons.edit_note_outlined),
               title: const Text('手动进货'),
@@ -76,16 +155,26 @@ class _EnhancedPurchasesPageState extends State<EnhancedPurchasesPage> {
       await _createManual();
       return;
     }
+    if (action == 'drafts') {
+      await _openDrafts();
+      return;
+    }
     final result = await Navigator.of(context).push<bool>(
       MaterialPageRoute(
         builder: (_) => PurchaseOcrScreen(
           repo: widget.repo,
           user: widget.user,
-          source: action == 'camera' ? ImageSource.camera : ImageSource.gallery,
+          source:
+              action == 'camera' ? ImageSource.camera : ImageSource.gallery,
         ),
       ),
     );
-    if (result == true) await _load();
+    await _load();
+    if (result == true && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('进货列表已更新')),
+      );
+    }
   }
 
   Future<void> _createManual() async {
@@ -181,6 +270,15 @@ class _EnhancedPurchasesPageState extends State<EnhancedPurchasesPage> {
       appBar: AppBar(
         title: const Text('进货 / Purchases'),
         actions: [
+          if (_drafts.isNotEmpty)
+            IconButton(
+              onPressed: _openDrafts,
+              tooltip: 'OCR 草稿 (${_drafts.length})',
+              icon: Badge(
+                label: Text('${_drafts.length}'),
+                child: const Icon(Icons.drafts_outlined),
+              ),
+            ),
           IconButton(
             onPressed: _chooseCreate,
             tooltip: '新增进货',
