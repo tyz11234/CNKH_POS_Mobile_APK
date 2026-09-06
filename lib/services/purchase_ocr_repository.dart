@@ -190,10 +190,12 @@ class PurchaseOcrRepository {
         for (final raw in lines) {
           final line = Map<String, dynamic>.from(raw as Map);
           if (line['productId']?.toString() != productId) continue;
-          final qty = (line['invoiceQty'] as num?)?.toDouble() ??
-              (line['qty'] as num?)?.toDouble();
-          final cost = (line['invoiceUnitCostCents'] as num?)?.toInt() ??
-              (line['unitCostCents'] as num?)?.toInt();
+          // Historical comparison must use the same base stock unit. OCR invoice
+          // quantity/cost may be CTN while qty/unitCostCents are already PCS.
+          final qty = (line['qty'] as num?)?.toDouble() ??
+              (line['invoiceQty'] as num?)?.toDouble();
+          final cost = (line['unitCostCents'] as num?)?.toInt() ??
+              (line['invoiceUnitCostCents'] as num?)?.toInt();
           if (qty != null && qty > 0) quantities.add(qty);
           lastCost ??= cost;
         }
@@ -353,22 +355,97 @@ class PurchaseOcrRepository {
     );
   }
 
-  Future<String> commitDraft(PurchaseDraft original, {required String operator}) async {
+  Future<String> commitDraft(
+    PurchaseDraft original, {
+    required String operator,
+    bool allowDuplicateInvoice = false,
+    String duplicateOverrideReason = '',
+  }) async {
     final draft = await validateDraft(original);
     if (draft.hasBlockingIssues) {
       throw StateError('仍有未匹配商品或无效数据，不能直接入库');
     }
+    for (final line in draft.lines) {
+      if (!line.conversionFactor.isFinite || line.conversionFactor <= 0) {
+        throw StateError('换算倍率必须是大于 0 的有效数字，不能入库');
+      }
+      if (!line.stockQuantity.isFinite || line.stockQuantity <= 0) {
+        throw StateError('换算后的库存数量无效，不能入库');
+      }
+    }
+    if (allowDuplicateInvoice && duplicateOverrideReason.trim().isEmpty) {
+      throw ArgumentError('重复 Invoice 强制入库必须填写原因');
+    }
+
     final db = await _db();
+    final alreadyCommitted = await db.query(
+      'purchase_commit_keys',
+      columns: ['purchase_id'],
+      where: 'draft_id=?',
+      whereArgs: [draft.draftId],
+      limit: 1,
+    );
+    if (alreadyCommitted.isNotEmpty) {
+      return alreadyCommitted.first['purchase_id']!.toString();
+    }
+    final legacyCommitted = await db.query(
+      'purchases',
+      columns: ['id'],
+      where: 'draft_id=?',
+      whereArgs: [draft.draftId],
+      limit: 1,
+    );
+    if (legacyCommitted.isNotEmpty) {
+      return legacyCommitted.first['id']!.toString();
+    }
+
     await saveDraft(draft);
     final purchaseId = AppDatabase.newId();
     final purchaseNo = await _database.nextPurchaseNo();
     final now = DateTime.now().toIso8601String();
     final totalCents = draft.invoiceTotalCents ?? draft.calculatedTotalCents;
 
-    await db.transaction((txn) async {
+    return db.transaction<String>((txn) async {
+      // Re-check inside the write transaction so concurrent double taps cannot
+      // both pass the preflight check and mutate stock twice.
+      final committed = await txn.query(
+        'purchase_commit_keys',
+        columns: ['purchase_id'],
+        where: 'draft_id=?',
+        whereArgs: [draft.draftId],
+        limit: 1,
+      );
+      if (committed.isNotEmpty) {
+        return committed.first['purchase_id']!.toString();
+      }
+
+      final invoiceNo = draft.invoiceNo.trim();
+      if (invoiceNo.isNotEmpty) {
+        final duplicates = await txn.rawQuery(
+          '''SELECT id, purchase_no FROM purchases
+             WHERE supplier_id=?
+               AND lower(trim(invoice_no))=lower(trim(?))
+               AND COALESCE(reversed,0)=0
+             LIMIT 1''',
+          [draft.supplierId, invoiceNo],
+        );
+        if (duplicates.isNotEmpty && !allowDuplicateInvoice) {
+          throw StateError('该供应商的 Invoice No 已经入库，已阻止重复入库。');
+        }
+      }
+
+      await txn.insert('purchase_commit_keys', {
+        'draft_id': draft.draftId,
+        'purchase_id': purchaseId,
+        'committed_at': now,
+      });
+
       final localLines = <Map<String, Object?>>[];
       final remoteLines = <Map<String, Object?>>[];
       for (final line in draft.lines) {
+        if (!line.conversionFactor.isFinite || line.conversionFactor <= 0) {
+          throw StateError('换算倍率必须是大于 0 的有效数字，不能入库');
+        }
         final productId = line.matchedProductId!;
         final rows = await txn.query(
           'products',
@@ -380,6 +457,9 @@ class PurchaseOcrRepository {
         final beforeCost = (rows.first['cost_cents'] as num?)?.toInt() ?? 0;
         final stockQty = line.stockQuantity;
         final baseCost = line.baseUnitCostCents;
+        if (!stockQty.isFinite || stockQty <= 0) {
+          throw StateError('换算后的库存数量无效，不能入库');
+        }
         final local = <String, Object?>{
           'productId': productId,
           'name': line.matchedProductName,
@@ -516,14 +596,28 @@ class PurchaseOcrRepository {
         'final_value': '$totalCents',
         'details': 'invoice=${draft.invoiceNo}; warnings=${draft.warnings.length}',
       });
+      if (allowDuplicateInvoice) {
+        await txn.insert('purchase_audit_log', {
+          'id': AppDatabase.newId(),
+          'purchase_id': purchaseId,
+          'draft_id': draft.draftId,
+          'occurred_at': now,
+          'username': operator,
+          'action': 'duplicate_invoice_override',
+          'field_name': 'invoice_no',
+          'original_value': draft.invoiceNo,
+          'final_value': draft.invoiceNo,
+          'details': duplicateOverrideReason.trim(),
+        });
+      }
       await txn.update(
         'purchase_drafts',
         {'status': 'committed'},
         where: 'id=?',
         whereArgs: [draft.draftId],
       );
+      return purchaseId;
     });
-    return purchaseId;
   }
 
   Future<void> _rememberAlias(
@@ -616,7 +710,13 @@ class PurchaseOcrRepository {
       final lines = (jsonDecode(purchase['lines_json'] as String) as List)
           .map((e) => Map<String, dynamic>.from(e as Map))
           .toList();
+      final purchasedAt = purchase['purchased_at']?.toString() ?? '';
+      final purchaseNo = purchase['purchase_no']?.toString() ?? '';
       final now = DateTime.now().toIso8601String();
+      final planned = <Map<String, Object?>>[];
+
+      // Preflight every line first. If any line is unsafe, throw before changing
+      // stock; the transaction then leaves the entire purchase untouched.
       for (final line in lines) {
         final productId = line['productId']?.toString() ?? '';
         final qty = (line['qty'] as num?)?.toDouble() ?? 0;
@@ -630,16 +730,52 @@ class PurchaseOcrRepository {
           limit: 1,
         );
         if (productRows.isEmpty) throw StateError('原进货商品已不存在，无法撤销');
+        final currentStock = (productRows.first['stock'] as num).toDouble();
+        if (!currentStock.isFinite || currentStock + 0.0000001 < qty) {
+          throw StateError('该进货后的库存已经发生后续变化，无法安全直接撤销，请使用库存调整或人工处理。');
+        }
+
+        final moves = await txn.query(
+          'stock_moves',
+          columns: ['reason', 'created_at', 'notes'],
+          where: 'product_id=? AND created_at>=?',
+          whereArgs: [productId, purchasedAt],
+          orderBy: 'created_at ASC',
+        );
+        final hasLaterBusinessMove = moves.any((move) {
+          final isOwnPurchaseMove =
+              move['created_at']?.toString() == purchasedAt &&
+              move['reason']?.toString() == 'purchase' &&
+              move['notes']?.toString() == purchaseNo;
+          return !isOwnPurchaseMove;
+        });
+        if (hasLaterBusinessMove) {
+          throw StateError('该进货后的库存已经发生后续变化，无法安全直接撤销，请使用库存调整或人工处理。');
+        }
+
         final currentCost = (productRows.first['cost_cents'] as num?)?.toInt() ?? 0;
         final purchaseCost = (line['unitCostCents'] as num?)?.toInt();
         final beforeCost = (line['beforeCostCents'] as num?)?.toInt();
+        planned.add({
+          'productId': productId,
+          'qty': qty,
+          'currentStock': currentStock,
+          'restoreCost': purchaseCost != null &&
+                  beforeCost != null &&
+                  currentCost == purchaseCost
+              ? beforeCost
+              : null,
+        });
+      }
+
+      for (final change in planned) {
+        final productId = change['productId']! as String;
+        final qty = change['qty']! as double;
         final update = <String, Object?>{
-          'stock': (productRows.first['stock'] as num).toDouble() - qty,
+          'stock': (change['currentStock']! as double) - qty,
         };
-        if (purchaseCost != null &&
-            beforeCost != null &&
-            currentCost == purchaseCost) {
-          update['cost_cents'] = beforeCost;
+        if (change['restoreCost'] != null) {
+          update['cost_cents'] = change['restoreCost'];
         }
         await txn.update('products', update, where: 'id=?', whereArgs: [productId]);
         await txn.insert('stock_moves', {
@@ -649,7 +785,7 @@ class PurchaseOcrRepository {
           'reason': 'purchase_reversal',
           'created_at': now,
           'operator': operator,
-          'notes': '${purchase['purchase_no']} · $reason',
+          'notes': '$purchaseNo · $reason',
         });
       }
 
