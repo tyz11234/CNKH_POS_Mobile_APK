@@ -108,7 +108,7 @@ class PurchaseInvoiceParser {
         .replaceAll(RegExp(r'\bRM\s*', caseSensitive: false), 'RM');
 
     final pattern = RegExp(
-      r'^(.+?)\s+(\d+(?:[.,]\d+)?)\s*([A-Za-z]{1,8})?\s+(?:RM)?\s*(\d+(?:[.,]\d{1,2})?)\s+(?:RM)?\s*(\d+(?:[.,]\d{1,2})?)$',
+      r'^(.+?)\s+(\d+(?:[.,]\d+)?)\s*([A-Za-z]{1,8})?\s+(?:RM)?\s*([0-9][0-9.,]*)\s+(?:RM)?\s*([0-9][0-9.,]*)$',
       caseSensitive: false,
     );
     final m = pattern.firstMatch(normalized);
@@ -117,8 +117,8 @@ class PurchaseInvoiceParser {
     final name = (m.group(1) ?? '').trim();
     final qty = _decimal(m.group(2));
     final unit = (m.group(3) ?? 'pcs').trim();
-    final unitCost = _moneyToCents(m.group(4));
-    final subtotal = _moneyToCents(m.group(5));
+    final unitCost = parseMoneyCents(m.group(4));
+    final subtotal = parseMoneyCents(m.group(5));
     if (name.isEmpty || qty == null || qty <= 0 || unitCost == null || subtotal == null) {
       return null;
     }
@@ -199,26 +199,58 @@ class PurchaseInvoiceParser {
 
   int? _lastMoneyCents(String line) {
     final matches = RegExp(
-      r'(?:RM\s*)?-?\d+(?:[.,]\d{1,2})?',
+      r'(?:RM\s*)?-?\d[\d.,]*',
       caseSensitive: false,
     ).allMatches(line).toList();
     if (matches.isEmpty) return null;
-    return _moneyToCents(matches.last.group(0));
+    return parseMoneyCents(matches.last.group(0));
   }
 
   double? _decimal(String? raw) =>
       double.tryParse((raw ?? '').replaceAll(',', '.').replaceAll(' ', ''));
 
-  int? _moneyToCents(String? raw) {
+  /// Parses invoice money without silently dropping thousands separators.
+  /// Supports common forms such as RM 1,234.56 and 1.234,56.
+  int? parseMoneyCents(String? raw) {
     if (raw == null) return null;
-    var s = raw.toUpperCase().replaceAll('RM', '').replaceAll(' ', '').trim();
+    var s = raw
+        .toUpperCase()
+        .replaceAll('RM', '')
+        .replaceAll(RegExp(r'\s+'), '')
+        .trim();
+    if (s.isEmpty) return null;
+
     final negative = s.startsWith('-');
     if (negative) s = s.substring(1);
-    if (s.contains(',') && !s.contains('.')) s = s.replaceAll(',', '.');
-    if (s.contains(',') && s.contains('.')) s = s.replaceAll(',', '');
-    final v = double.tryParse(s);
-    if (v == null) return null;
-    final cents = (v * 100).round();
+    if (s.isEmpty || !RegExp(r'^\d[\d.,]*$').hasMatch(s)) return null;
+
+    final lastComma = s.lastIndexOf(',');
+    final lastDot = s.lastIndexOf('.');
+    String normalized;
+
+    if (lastComma >= 0 && lastDot >= 0) {
+      final decimalSeparator = lastComma > lastDot ? ',' : '.';
+      final groupingSeparator = decimalSeparator == ',' ? '.' : ',';
+      normalized = s.replaceAll(groupingSeparator, '');
+      if (decimalSeparator == ',') normalized = normalized.replaceAll(',', '.');
+    } else if (lastComma >= 0) {
+      final decimals = s.length - lastComma - 1;
+      normalized = decimals == 1 || decimals == 2
+          ? s.replaceAll(',', '.')
+          : s.replaceAll(',', '');
+    } else if (lastDot >= 0) {
+      final decimals = s.length - lastDot - 1;
+      normalized = decimals == 1 || decimals == 2
+          ? s
+          : s.replaceAll('.', '');
+    } else {
+      normalized = s;
+    }
+
+    if (!RegExp(r'^\d+(?:\.\d{1,2})?$').hasMatch(normalized)) return null;
+    final value = double.tryParse(normalized);
+    if (value == null || !value.isFinite) return null;
+    final cents = (value * 100).round();
     return negative ? -cents : cents;
   }
 }
