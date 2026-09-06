@@ -179,6 +179,36 @@ WHERE draft_id IS NOT NULL AND trim(draft_id) <> ''
 ORDER BY purchased_at ASC
 ''');
 
+  // Attachment transfer reuses the existing durable sync_outbox. The normal
+  // LAN client deletes an outbox row only after the Desktop explicitly ACKs the
+  // same operation id. These triggers mirror that state onto the attachment
+  // record without changing the existing sync loop.
+  await db.execute('''
+CREATE TRIGGER IF NOT EXISTS purchase_attachment_outbox_acked
+AFTER DELETE ON sync_outbox
+WHEN OLD.kind='purchase_attachment'
+BEGIN
+  UPDATE purchase_attachments
+     SET sync_status='synced',
+         synced_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+         last_error=''
+   WHERE purchase_id=OLD.entity_id
+     AND kind='invoice_original';
+END
+''');
+  await db.execute('''
+CREATE TRIGGER IF NOT EXISTS purchase_attachment_outbox_failed
+AFTER UPDATE OF last_error ON sync_outbox
+WHEN NEW.kind='purchase_attachment' AND trim(COALESCE(NEW.last_error,''))<>''
+BEGIN
+  UPDATE purchase_attachments
+     SET sync_status='failed',
+         last_error=NEW.last_error
+   WHERE purchase_id=NEW.entity_id
+     AND kind='invoice_original';
+END
+''');
+
   await db.execute(
     'CREATE INDEX IF NOT EXISTS idx_purchase_drafts_status ON purchase_drafts(status, created_at)',
   );
