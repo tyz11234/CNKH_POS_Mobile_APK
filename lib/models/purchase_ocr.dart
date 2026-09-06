@@ -168,7 +168,12 @@ class PurchaseDraft {
   final String supplierName;
   final String invoiceNo;
   final String invoiceDate;
+
+  /// Compressed copy used for thumbnails and normal UI display.
   final String imagePath;
+
+  /// Byte-for-byte copy of the picked invoice used for OCR and audit evidence.
+  final String originalImagePath;
   final String ocrRawText;
   final List<PurchaseDraftLine> lines;
   final int discountCents;
@@ -188,6 +193,7 @@ class PurchaseDraft {
     this.invoiceNo = '',
     this.invoiceDate = '',
     this.imagePath = '',
+    this.originalImagePath = '',
     this.ocrRawText = '',
     this.lines = const [],
     this.discountCents = 0,
@@ -222,6 +228,7 @@ class PurchaseDraft {
     String? invoiceNo,
     String? invoiceDate,
     String? imagePath,
+    String? originalImagePath,
     String? ocrRawText,
     List<PurchaseDraftLine>? lines,
     int? discountCents,
@@ -240,6 +247,7 @@ class PurchaseDraft {
         invoiceNo: invoiceNo ?? this.invoiceNo,
         invoiceDate: invoiceDate ?? this.invoiceDate,
         imagePath: imagePath ?? this.imagePath,
+        originalImagePath: originalImagePath ?? this.originalImagePath,
         ocrRawText: ocrRawText ?? this.ocrRawText,
         lines: lines ?? this.lines,
         discountCents: discountCents ?? this.discountCents,
