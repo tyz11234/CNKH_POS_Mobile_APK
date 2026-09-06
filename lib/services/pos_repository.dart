@@ -195,6 +195,7 @@ class PosRepository {
   Future<List<Product>> searchProducts(
     String query, {
     int limit = 80,
+    int offset = 0,
     String? category,
   }) async {
     final d = await _db.db;
@@ -207,8 +208,9 @@ class PosRepository {
         'products',
         where: 'is_deleted=0$catClause',
         whereArgs: catArgs.isEmpty ? null : catArgs,
-        orderBy: 'category, name_zh',
+        orderBy: 'category COLLATE NOCASE, name_zh COLLATE NOCASE, id',
         limit: limit,
+        offset: offset,
       );
       return rows.map(Product.fromMap).toList();
     }
@@ -218,18 +220,47 @@ class PosRepository {
       where:
           'is_deleted=0 AND (name_zh LIKE ? OR name_en LIKE ? OR sku LIKE ? OR barcode LIKE ? OR category LIKE ?)$catClause',
       whereArgs: [like, like, like, like, like, ...catArgs],
-      orderBy: 'name_zh',
+      orderBy: 'name_zh COLLATE NOCASE, id',
       limit: limit,
+      offset: offset,
     );
-    // Exact barcode first
+    // Keep the original exact-barcode preference inside each stable page.
     rows.sort((a, b) {
       final ab = (a['barcode'] as String?) ?? '';
       final bb = (b['barcode'] as String?) ?? '';
-      if (ab == q) return -1;
-      if (bb == q) return 1;
-      return 0;
+      if (ab == q && bb != q) return -1;
+      if (bb == q && ab != q) return 1;
+      final an = ((a['name_zh'] as String?) ?? '').toLowerCase();
+      final bn = ((b['name_zh'] as String?) ?? '').toLowerCase();
+      final byName = an.compareTo(bn);
+      if (byName != 0) return byName;
+      return (a['id'] as String).compareTo(b['id'] as String);
     });
     return rows.map(Product.fromMap).toList();
+  }
+
+  Future<int> countProducts(String query, {String? category}) async {
+    final d = await _db.db;
+    final q = query.trim();
+    final cat = (category ?? '').trim();
+    final where = <String>['is_deleted=0'];
+    final args = <Object?>[];
+    if (q.isNotEmpty) {
+      final like = '%$q%';
+      where.add(
+        '(name_zh LIKE ? OR name_en LIKE ? OR sku LIKE ? OR barcode LIKE ? OR category LIKE ?)',
+      );
+      args.addAll([like, like, like, like, like]);
+    }
+    if (cat.isNotEmpty) {
+      where.add('category=?');
+      args.add(cat);
+    }
+    final rows = await d.rawQuery(
+      'SELECT COUNT(*) AS c FROM products WHERE ${where.join(' AND ')}',
+      args,
+    );
+    return Sqflite.firstIntValue(rows) ?? 0;
   }
 
   Future<Product?> findByBarcodeOrSku(String code) async {
@@ -316,12 +347,23 @@ class PosRepository {
     });
   }
 
-  Future<List<Customer>> listCustomers() async {
+  Future<List<Customer>> listCustomers({
+    int? limit,
+    int offset = 0,
+    String query = '',
+  }) async {
     final d = await _db.db;
+    final q = query.trim();
+    final like = '%$q%';
     final rows = await d.query(
       'customers',
-      where: 'is_deleted=0',
-      orderBy: 'name COLLATE NOCASE',
+      where: q.isEmpty
+          ? 'is_deleted=0'
+          : 'is_deleted=0 AND (name LIKE ? OR phone LIKE ? OR notes LIKE ?)',
+      whereArgs: q.isEmpty ? null : [like, like, like],
+      orderBy: 'name COLLATE NOCASE, id',
+      limit: limit,
+      offset: limit == null ? null : offset,
     );
     return rows.map(Customer.fromMap).toList();
   }
@@ -372,11 +414,26 @@ class PosRepository {
 
   Future<void> softDeleteCustomer(String id) =>
       _deleteEntity('customer', 'customers', id);
-  Future<List<Supplier>> listSuppliers() async => (await (await _db.db).query(
-    'suppliers',
-    where: 'is_deleted=0',
-    orderBy: 'name COLLATE NOCASE',
-  )).map(Supplier.fromMap).toList();
+  Future<List<Supplier>> listSuppliers({
+    int? limit,
+    int offset = 0,
+    String query = '',
+  }) async {
+    final d = await _db.db;
+    final q = query.trim();
+    final like = '%$q%';
+    final rows = await d.query(
+      'suppliers',
+      where: q.isEmpty
+          ? 'is_deleted=0'
+          : 'is_deleted=0 AND (name LIKE ? OR phone LIKE ? OR email LIKE ? OR notes LIKE ?)',
+      whereArgs: q.isEmpty ? null : [like, like, like, like],
+      orderBy: 'name COLLATE NOCASE, id',
+      limit: limit,
+      offset: limit == null ? null : offset,
+    );
+    return rows.map(Supplier.fromMap).toList();
+  }
   Future<void> upsertSupplier(Supplier s) =>
       _saveEntity('supplier', 'suppliers', {
         'id': s.id,
@@ -505,9 +562,59 @@ class PosRepository {
     return rows.map(SaleRecord.fromMap).toList();
   }
 
-  Future<List<SaleRecord>> salesAll({int? limit}) async {
+  Future<List<SaleRecord>> salesAll({int? limit, int offset = 0}) async {
     final d = await _db.db;
-    final rows = await d.query('sales', orderBy: 'sold_at DESC', limit: limit);
+    final rows = await d.query(
+      'sales',
+      orderBy: 'sold_at DESC, id DESC',
+      limit: limit,
+      offset: limit == null ? null : offset,
+    );
+    return rows.map(SaleRecord.fromMap).toList();
+  }
+
+  Future<List<SaleRecord>> salesPage({
+    bool todayOnly = false,
+    String query = '',
+    DateTime? from,
+    DateTime? to,
+    int limit = 50,
+    int offset = 0,
+  }) async {
+    final d = await _db.db;
+    final where = <String>[];
+    final args = <Object?>[];
+    if (todayOnly) {
+      final day = DateTime.now().toIso8601String().substring(0, 10);
+      where.add('sold_at LIKE ?');
+      args.add('$day%');
+      // Preserve the old Today behavior: voided sales are excluded.
+      where.add('voided=0');
+    }
+    if (from != null) {
+      where.add('substr(sold_at,1,10) >= ?');
+      args.add(from.toIso8601String().substring(0, 10));
+    }
+    if (to != null) {
+      where.add('substr(sold_at,1,10) <= ?');
+      args.add(to.toIso8601String().substring(0, 10));
+    }
+    final q = query.trim();
+    if (q.isNotEmpty) {
+      final like = '%$q%';
+      where.add(
+        '(receipt_no LIKE ? OR customer_phone LIKE ? OR customer_name LIKE ? OR payment_method LIKE ?)',
+      );
+      args.addAll([like, like, like, like]);
+    }
+    final rows = await d.query(
+      'sales',
+      where: where.isEmpty ? null : where.join(' AND '),
+      whereArgs: where.isEmpty ? null : args,
+      orderBy: 'sold_at DESC, id DESC',
+      limit: limit,
+      offset: offset,
+    );
     return rows.map(SaleRecord.fromMap).toList();
   }
 
@@ -589,9 +696,17 @@ class PosRepository {
     return cart;
   }
 
-  Future<List<Map<String, Object?>>> listPurchases() async {
+  Future<List<Map<String, Object?>>> listPurchases({
+    int? limit,
+    int offset = 0,
+  }) async {
     final d = await _db.db;
-    return d.query('purchases', orderBy: 'purchased_at DESC');
+    return d.query(
+      'purchases',
+      orderBy: 'purchased_at DESC, id DESC',
+      limit: limit,
+      offset: limit == null ? null : offset,
+    );
   }
 
   Future<void> createPurchase({
@@ -766,9 +881,17 @@ class PosRepository {
     }, conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
-  Future<List<Map<String, Object?>>> listClosings() async {
+  Future<List<Map<String, Object?>>> listClosings({
+    int? limit,
+    int offset = 0,
+  }) async {
     final d = await _db.db;
-    return d.query('daily_closings', orderBy: 'business_date DESC');
+    return d.query(
+      'daily_closings',
+      orderBy: 'business_date DESC, closed_at DESC, id DESC',
+      limit: limit,
+      offset: limit == null ? null : offset,
+    );
   }
 
   Future<List<Map<String, Object?>>> listUsers() async {
@@ -829,6 +952,7 @@ class PosRepository {
     String? username,
     bool todayOnly = false,
     int limit = 200,
+    int offset = 0,
   }) async {
     final d = await _db.db;
     final where = <String>[];
@@ -846,8 +970,9 @@ class PosRepository {
       'audit_logs',
       where: where.isEmpty ? null : where.join(' AND '),
       whereArgs: where.isEmpty ? null : args,
-      orderBy: 'occurred_at DESC',
+      orderBy: 'occurred_at DESC, id DESC',
       limit: limit,
+      offset: offset,
     );
     return rows.map(AuditEntry.fromMap).toList();
   }

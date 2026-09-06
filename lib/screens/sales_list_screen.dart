@@ -31,6 +31,10 @@ class _SalesListScreenState extends State<SalesListScreen> {
   List<SaleRecord> _sales = [];
   List<SaleRecord> _filtered = [];
   bool _loading = true;
+  static const _pageSize = 50;
+  int _page = 0;
+  bool _hasNext = false;
+  int _loadVersion = 0;
   final _q = TextEditingController();
   DateTime? _from;
   DateTime? _to;
@@ -58,44 +62,40 @@ class _SalesListScreenState extends State<SalesListScreen> {
   }
 
   Future<void> _load() async {
-    final list = widget.todayOnly
-        ? await widget.repo.salesToday()
-        : await widget.repo.salesAll();
-    if (!mounted) return;
+    final version = ++_loadVersion;
+    if (mounted) setState(() => _loading = true);
+    final list = await widget.repo.salesPage(
+      todayOnly: widget.todayOnly,
+      query: _q.text,
+      from: _from,
+      to: _to,
+      limit: _pageSize + 1,
+      offset: _page * _pageSize,
+    );
+    if (!mounted || version != _loadVersion) return;
+    if (list.isEmpty && _page > 0) {
+      _page--;
+      await _load();
+      return;
+    }
     setState(() {
-      _sales = list;
+      _sales = list.take(_pageSize).toList(growable: false);
+      _filtered = _sales;
+      _hasNext = list.length > _pageSize;
       _loading = false;
     });
-    _applyFilter();
   }
 
   void _applyFilter() {
-    final q = _q.text.trim().toLowerCase();
-    setState(() {
-      _filtered = [
-        for (final s in _sales)
-          if (_match(s, q)) s,
-      ];
-    });
+    _page = 0;
+    _load();
   }
 
-  bool _match(SaleRecord s, String q) {
-    if (_from != null) {
-      final sold = DateTime.tryParse(s.soldAt);
-      if (sold != null && sold.isBefore(_from!)) return false;
-    }
-    if (_to != null) {
-      final sold = DateTime.tryParse(s.soldAt);
-      final end = DateTime(_to!.year, _to!.month, _to!.day, 23, 59, 59);
-      if (sold != null && sold.isAfter(end)) return false;
-    }
-    if (q.isEmpty) return true;
-    final phone = (s.customerPhone ?? '').toLowerCase();
-    final name = (s.customerName ?? '').toLowerCase();
-    return s.receiptNo.toLowerCase().contains(q) ||
-        phone.contains(q) ||
-        name.contains(q) ||
-        s.paymentMethod.toLowerCase().contains(q);
+  Future<void> _changePage(int delta) async {
+    final next = _page + delta;
+    if (next < 0 || (delta > 0 && !_hasNext)) return;
+    setState(() => _page = next);
+    await _load();
   }
 
   Future<void> _pickFrom() async {
@@ -325,6 +325,25 @@ class _SalesListScreenState extends State<SalesListScreen> {
                           );
                         },
                       ),
+          ),
+        ),
+        SafeArea(
+          top: false,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
+            child: Row(
+              children: [
+                OutlinedButton(
+                  onPressed: _page == 0 || _loading ? null : () => _changePage(-1),
+                  child: const Text('上一页'),
+                ),
+                Expanded(child: Center(child: Text('第 ${_page + 1} 页'))),
+                OutlinedButton(
+                  onPressed: !_hasNext || _loading ? null : () => _changePage(1),
+                  child: const Text('下一页'),
+                ),
+              ],
+            ),
           ),
         ),
       ],

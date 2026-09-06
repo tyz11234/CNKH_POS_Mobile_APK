@@ -42,6 +42,37 @@ jobs:
       - name: Build Android release APK
         run: flutter build apk --release
 
+      - name: Verify Release INTERNET permission and identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Mobile source SHA: $(git rev-parse HEAD)"
+          grep '^version:' pubspec.yaml
+          apk='build/app/outputs/flutter-apk/app-release.apk'
+          test -f "$apk"
+
+          manifest=$(find build/app/intermediates \
+            \( -path '*merged_manifest*release*AndroidManifest.xml' \
+               -o -path '*merged_manifests*release*AndroidManifest.xml' \) \
+            -print | head -n 1 || true)
+          if [ -z "$manifest" ]; then
+            echo 'Release merged AndroidManifest.xml not found' >&2
+            exit 1
+          fi
+          echo "Merged manifest: $manifest"
+          grep -n 'android.permission.INTERNET' "$manifest"
+
+          sdk_root="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          tool=$(find "$sdk_root/build-tools" -type f -name aapt 2>/dev/null | sort -V | tail -n 1 || true)
+          if [ -z "$tool" ]; then
+            echo 'aapt not found in Android SDK build-tools' >&2
+            exit 1
+          fi
+          echo "Permission tool: $tool"
+          "$tool" dump permissions "$apk" | tee /tmp/apk-permissions.txt
+          grep -q 'android.permission.INTERNET' /tmp/apk-permissions.txt
+          sha256sum "$apk" | tee /tmp/app-release.sha256
+
       - name: Stage APKs
         shell: bash
         run: |

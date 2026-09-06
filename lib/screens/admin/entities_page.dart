@@ -23,6 +23,10 @@ class _EntitiesPageState extends State<EntitiesPage> {
   final Set<String> _selected = <String>{};
   bool _selectMode = false;
   bool _busy = false;
+  static const _pageSize = 50;
+  int _page = 0;
+  bool _hasNext = false;
+  int _loadVersion = 0;
 
   bool get _isCustomers => widget.kind == 'customers';
   String get _title => _isCustomers ? '客户 / Customers' : '供应商 / Suppliers';
@@ -37,16 +41,41 @@ class _EntitiesPageState extends State<EntitiesPage> {
   }
 
   Future<void> _load() async {
+    final version = ++_loadVersion;
     final items = _isCustomers
-        ? await widget.repo.listCustomers()
-        : await widget.repo.listSuppliers();
-    if (!mounted) return;
+        ? await widget.repo.listCustomers(
+            limit: _pageSize + 1,
+            offset: _page * _pageSize,
+          )
+        : await widget.repo.listSuppliers(
+            limit: _pageSize + 1,
+            offset: _page * _pageSize,
+          );
+    if (!mounted || version != _loadVersion) return;
+    if (items.isEmpty && _page > 0) {
+      _page--;
+      await _load();
+      return;
+    }
     setState(() {
-      _items = items.cast<Object>();
+      _hasNext = items.length > _pageSize;
+      _items = items.take(_pageSize).cast<Object>().toList(growable: false);
       _selected.removeWhere(
         (id) => !_items.any((item) => _idOf(item) == id),
       );
+      if (_selected.isEmpty) _selectMode = false;
     });
+  }
+
+  Future<void> _changePage(int delta) async {
+    final next = _page + delta;
+    if (next < 0 || (delta > 0 && !_hasNext) || _busy) return;
+    setState(() {
+      _page = next;
+      _selected.clear();
+      _selectMode = false;
+    });
+    await _load();
   }
 
   Future<void> _edit([Object? existing]) async {
@@ -320,6 +349,25 @@ class _EntitiesPageState extends State<EntitiesPage> {
               icon: const Icon(Icons.add),
             ),
         ],
+      ),
+      bottomNavigationBar: SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
+          child: Row(
+            children: [
+              OutlinedButton(
+                onPressed: _page == 0 || _busy ? null : () => _changePage(-1),
+                child: const Text('上一页'),
+              ),
+              Expanded(child: Center(child: Text('第 ${_page + 1} 页'))),
+              OutlinedButton(
+                onPressed: !_hasNext || _busy ? null : () => _changePage(1),
+                child: const Text('下一页'),
+              ),
+            ],
+          ),
+        ),
       ),
       body: Stack(
         children: [

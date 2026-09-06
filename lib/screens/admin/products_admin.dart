@@ -28,6 +28,10 @@ class _ProductsAdminPageState extends State<ProductsAdminPage> {
   bool _selectMode = false;
   bool _imagesOn = false;
   bool _busy = false;
+  static const _pageSize = 50;
+  int _page = 0;
+  bool _hasNext = false;
+  int _loadVersion = 0;
   late final BarcodeLabelService _labels = BarcodeLabelService(widget.repo);
   final _imgStore = ProductImageStore();
 
@@ -35,7 +39,7 @@ class _ProductsAdminPageState extends State<ProductsAdminPage> {
   void initState() {
     super.initState();
     _load();
-    _q.addListener(_load);
+    _q.addListener(_onQueryChanged);
     widget.repo.productImagesEnabled().then((v) {
       if (mounted) setState(() => _imagesOn = v);
     });
@@ -43,19 +47,48 @@ class _ProductsAdminPageState extends State<ProductsAdminPage> {
 
   @override
   void dispose() {
+    _q.removeListener(_onQueryChanged);
     _q.dispose();
     super.dispose();
   }
 
+  void _onQueryChanged() {
+    _page = 0;
+    _selected.clear();
+    _selectMode = false;
+    _load();
+  }
+
   Future<void> _load() async {
-    final list = await widget.repo.searchProducts(_q.text, limit: 300);
-    if (mounted) {
-      setState(() {
-        _items = list;
-        _selected.removeWhere((id) => !_items.any((p) => p.id == id));
-        if (_selected.isEmpty) _selectMode = false;
-      });
+    final version = ++_loadVersion;
+    final list = await widget.repo.searchProducts(
+      _q.text,
+      limit: _pageSize + 1,
+      offset: _page * _pageSize,
+    );
+    if (!mounted || version != _loadVersion) return;
+    if (list.isEmpty && _page > 0) {
+      _page--;
+      await _load();
+      return;
     }
+    setState(() {
+      _hasNext = list.length > _pageSize;
+      _items = list.take(_pageSize).toList(growable: false);
+      _selected.removeWhere((id) => !_items.any((p) => p.id == id));
+      if (_selected.isEmpty) _selectMode = false;
+    });
+  }
+
+  Future<void> _changePage(int delta) async {
+    final next = _page + delta;
+    if (next < 0 || (delta > 0 && !_hasNext) || _busy) return;
+    setState(() {
+      _page = next;
+      _selected.clear();
+      _selectMode = false;
+    });
+    await _load();
   }
 
   List<Product> get _selectedProducts =>
@@ -503,6 +536,25 @@ class _ProductsAdminPageState extends State<ProductsAdminPage> {
             ),
           ],
         ],
+      ),
+      bottomNavigationBar: SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
+          child: Row(
+            children: [
+              OutlinedButton(
+                onPressed: _page == 0 || _busy ? null : () => _changePage(-1),
+                child: const Text('上一页'),
+              ),
+              Expanded(child: Center(child: Text('第 ${_page + 1} 页'))),
+              OutlinedButton(
+                onPressed: !_hasNext || _busy ? null : () => _changePage(1),
+                child: const Text('下一页'),
+              ),
+            ],
+          ),
+        ),
       ),
       body: Stack(
         children: [
