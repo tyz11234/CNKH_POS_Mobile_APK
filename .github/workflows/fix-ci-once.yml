@@ -20,17 +20,16 @@ jobs:
           ref: fix/pagination-release-20260906
           fetch-depth: 0
 
-      - name: Apply focused fixes
+      - name: Apply focused Dart fixes
         run: python3 tools/fix_ci_once.py
 
-      - name: Commit cleanup
+      - name: Commit Dart cleanup
         shell: bash
         run: |
           set -euo pipefail
-          rm -f tools/fix_ci_once.py .github/workflows/fix-ci-once.yml
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -A
+          git add lib/screens/admin/admin_hub_legacy.dart lib/screens/sales_list_screen.dart
           git diff --cached --check
-          git commit -m 'Fix pagination CI syntax and verify release permission'
+          git commit -m 'Fix pagination CI syntax'
           git push origin HEAD:fix/pagination-release-20260906
