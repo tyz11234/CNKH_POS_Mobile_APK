@@ -830,6 +830,9 @@ class PurchaseOcrRepository {
       );
       if (rows.isEmpty) throw StateError('进货记录不存在');
       final purchase = rows.first;
+      if (purchase['source']?.toString() == 'desktop_sync') {
+        throw StateError('该进货由 Desktop 建立，请在 Desktop 撤销；Mobile 这里只同步历史记录。');
+      }
       if (purchase['reversed'] == 1) return;
       if ((await txn.query(
         'purchase_reversals',
