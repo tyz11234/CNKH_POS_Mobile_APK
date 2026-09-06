@@ -1,5 +1,9 @@
 import 'dart:convert';
+import 'dart:io';
+
+import 'package:cryptography/cryptography.dart';
 import 'package:sqflite/sqflite.dart';
+
 import '../db/app_database.dart';
 import 'sync_role.dart';
 
@@ -57,13 +61,73 @@ Future<void> rememberEntityId(
     where: 'entity=? AND local_id=?',
     whereArgs: [entity, localId],
   );
-  if (previous.isNotEmpty && previous.first['remote_id'] != '$remoteId')
+  if (previous.isNotEmpty && previous.first['remote_id'] != '$remoteId') {
     throw StateError('商品或客户关联冲突，请核对重复资料');
+  }
   await db.insert('sync_entity_ids', {
     'entity': entity,
     'remote_id': '$remoteId',
     'local_id': localId,
   }, conflictAlgorithm: ConflictAlgorithm.replace);
+}
+
+String _hex(List<int> bytes) =>
+    bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+
+Future<void> _queueOcrOriginalAttachment(
+  DatabaseExecutor db,
+  String purchaseId,
+  Map<String, Object?> purchasePayload,
+) async {
+  if (purchasePayload['source']?.toString() != 'ocr') return;
+  final draftId = purchasePayload['draft_id']?.toString() ?? '';
+  if (draftId.isEmpty) return;
+
+  final draftRows = await db.query(
+    'purchase_drafts',
+    columns: const ['original_image_path'],
+    where: 'id=?',
+    whereArgs: [draftId],
+    limit: 1,
+  );
+  if (draftRows.isEmpty) return;
+  final path = draftRows.first['original_image_path']?.toString() ?? '';
+  if (path.isEmpty) return;
+
+  // File preparation is intentionally best-effort. A local image read failure
+  // must never roll back the already-confirmed Purchase/stock transaction.
+  try {
+    final file = File(path);
+    if (!await file.exists()) return;
+    final bytes = await file.readAsBytes();
+    if (bytes.isEmpty) return;
+    final digest = await Sha256().hash(bytes);
+    final attachmentId = '$purchaseId-invoice-original';
+    final operationId = AppDatabase.newId();
+    await db.insert('sync_outbox', {
+      'id': operationId,
+      'kind': 'purchase_attachment',
+      // The stable Purchase id lets SQLite ACK triggers update the local
+      // purchase_attachments row even though that row is created later in the
+      // same Purchase transaction.
+      'entity_id': purchaseId,
+      'payload_json': jsonEncode(<String, Object?>{
+        'id': attachmentId,
+        'purchase_id': purchaseId,
+        'kind': 'invoice_original',
+        'filename': file.uri.pathSegments.isEmpty
+            ? 'invoice_original'
+            : file.uri.pathSegments.last,
+        'content_hash': _hex(digest.bytes),
+        'base64': base64Encode(bytes),
+        'created_at': DateTime.now().toUtc().toIso8601String(),
+      }),
+      'created_at': DateTime.now().toUtc().toIso8601String(),
+    });
+  } catch (_) {
+    // The Purchase stays committed. Network retry is handled by sync_outbox
+    // once the attachment operation has been prepared successfully.
+  }
 }
 
 Future<void> queueMutation(
@@ -80,6 +144,9 @@ Future<void> queueMutation(
     'payload_json': jsonEncode(payload),
     'created_at': DateTime.now().toUtc().toIso8601String(),
   });
+  if (kind == 'purchase') {
+    await _queueOcrOriginalAttachment(db, entityId, payload);
+  }
 }
 
 class AsyncMutex {
