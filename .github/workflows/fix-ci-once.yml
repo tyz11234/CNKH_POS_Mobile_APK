@@ -23,9 +23,6 @@ jobs:
       - name: Apply focused fixes
         run: python3 tools/fix_ci_once.py
 
-      - name: Format touched Dart sources
-        run: dart format lib/screens/admin/admin_hub_legacy.dart lib/screens/sales_list_screen.dart
-
       - name: Commit cleanup
         shell: bash
         run: |
