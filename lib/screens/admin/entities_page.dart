@@ -329,11 +329,18 @@ class _EntitiesPageState extends State<EntitiesPage> {
               final item = _items[i];
               final id = _idOf(item);
               final selected = _selected.contains(id);
-              final title =
-                  item is Customer ? item.name : (item as Supplier).name;
-              final subtitle = item is Customer
-                  ? '${item.phone}${item.notes.isEmpty ? '' : '\n${item.notes}'}'
-                  : '${(item as Supplier).phone}${item.email.isEmpty ? '' : '\n${item.email}'}';
+              late final String title;
+              late final String subtitle;
+              if (item is Customer) {
+                title = item.name;
+                subtitle =
+                    '${item.phone}${item.notes.isEmpty ? '' : '\n${item.notes}'}';
+              } else {
+                final supplier = item as Supplier;
+                title = supplier.name;
+                subtitle =
+                    '${supplier.phone}${supplier.email.isEmpty ? '' : '\n${supplier.email}'}';
+              }
               return ListTile(
                 leading: _selectMode
                     ? Checkbox(
