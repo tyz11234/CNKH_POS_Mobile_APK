@@ -1,7 +1,10 @@
 import '../models/purchase_ocr.dart';
 
 class PurchaseHistorySample {
+  /// Typical quantity in the POS base stock unit (for example PCS, not CTN).
   final double? typicalQuantity;
+
+  /// Previous cost in cents per POS base stock unit.
   final int? lastUnitCostCents;
 
   const PurchaseHistorySample({this.typicalQuantity, this.lastUnitCostCents});
@@ -29,6 +32,13 @@ class PurchaseValidationService {
       out.add(const PurchaseWarning(
         code: 'invalid_quantity',
         message: '数量必须大于 0。',
+        level: PurchaseWarningLevel.error,
+      ));
+    }
+    if (!line.conversionFactor.isFinite || line.conversionFactor <= 0) {
+      out.add(const PurchaseWarning(
+        code: 'invalid_conversion_factor',
+        message: '换算倍率必须是大于 0 的有效数字。',
         level: PurchaseWarningLevel.error,
       ));
     }
@@ -62,24 +72,27 @@ class PurchaseValidationService {
     }
 
     final typical = history.typicalQuantity;
+    final stockQuantity = line.stockQuantity;
     if (typical != null &&
         typical > 0 &&
-        line.quantity >= typical * quantityMultiplierWarning) {
+        stockQuantity.isFinite &&
+        stockQuantity >= typical * quantityMultiplierWarning) {
       out.add(PurchaseWarning(
         code: 'quantity_anomaly',
         message:
-            '本次数量 ${line.quantity} 明显高于近期常见数量 ${typical.toStringAsFixed(2)}，请确认是否 OCR 误读。',
+            '本次换算后数量 ${stockQuantity.toStringAsFixed(2)} 明显高于近期常见数量 ${typical.toStringAsFixed(2)}，请确认数量与换算倍率。',
       ));
     }
 
     final previousCost = history.lastUnitCostCents;
-    if (previousCost != null && previousCost > 0) {
-      final ratio = (line.unitCostCents - previousCost).abs() / previousCost;
+    if (previousCost != null && previousCost > 0 && line.conversionFactor.isFinite && line.conversionFactor > 0) {
+      final currentBaseCost = line.baseUnitCostCents;
+      final ratio = (currentBaseCost - previousCost).abs() / previousCost;
       if (ratio >= costChangeWarningRatio) {
         out.add(PurchaseWarning(
           code: 'cost_anomaly',
           message:
-              '单位成本与上次相差 ${(ratio * 100).toStringAsFixed(0)}%（上次 RM ${(previousCost / 100).toStringAsFixed(2)}）。',
+              '基础单位成本与上次相差 ${(ratio * 100).toStringAsFixed(0)}%（上次 RM ${(previousCost / 100).toStringAsFixed(2)}）。',
         ));
       }
     }
