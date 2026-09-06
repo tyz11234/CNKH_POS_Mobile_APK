@@ -119,6 +119,26 @@ CREATE TABLE IF NOT EXISTS purchase_reversals (
   FOREIGN KEY(purchase_id) REFERENCES purchases(id) ON DELETE CASCADE
 )''');
 
+  // A draft may be retried after a UI double tap, app restart, timeout or lost ACK.
+  // Reserving the draft id in the same transaction as the stock mutation makes
+  // the commit idempotent without relying on timing in the UI.
+  await db.execute('''
+CREATE TABLE IF NOT EXISTS purchase_commit_keys (
+  draft_id TEXT PRIMARY KEY,
+  purchase_id TEXT NOT NULL,
+  committed_at TEXT NOT NULL
+)''');
+
+  // Backfill keys for OCR purchases made before this table existed. Ignore
+  // duplicate legacy rows rather than deleting or rewriting historical data.
+  await db.execute('''
+INSERT OR IGNORE INTO purchase_commit_keys(draft_id, purchase_id, committed_at)
+SELECT draft_id, id, purchased_at
+FROM purchases
+WHERE draft_id IS NOT NULL AND trim(draft_id) <> ''
+ORDER BY purchased_at ASC
+''');
+
   await db.execute(
     'CREATE INDEX IF NOT EXISTS idx_purchase_drafts_status ON purchase_drafts(status, created_at)',
   );
@@ -127,5 +147,8 @@ CREATE TABLE IF NOT EXISTS purchase_reversals (
   );
   await db.execute(
     'CREATE INDEX IF NOT EXISTS idx_purchase_audit_purchase ON purchase_audit_log(purchase_id, occurred_at)',
+  );
+  await db.execute(
+    'CREATE INDEX IF NOT EXISTS idx_purchases_supplier_invoice ON purchases(supplier_id, invoice_no, reversed)',
   );
 }
