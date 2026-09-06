@@ -1,3 +1,5 @@
+import 'package:flutter/services.dart';
+import 'package:cnkh_pos_mobile/screens/settings_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:io';
 import 'package:cnkh_pos_mobile/db/app_database.dart';
@@ -17,7 +19,11 @@ void main() {
   late PosRepository repo;
   setUp(() async {
     SharedPreferences.setMockInitialValues({});
+    final view = TestWidgetsFlutterBinding.instance.platformDispatcher.implicitView!;
+    view.physicalSize = const Size(430, 932);
+    view.devicePixelRatio = 1;
     temp = await Directory.systemTemp.createTemp('cnkh-widget-');
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(const MethodChannel('plugins.flutter.io/path_provider'), (_) async => temp.path);
     database = AppDatabase.forTesting('${temp.path}/pos.db', seed: true);
     repo = PosRepository(database: database);
     await repo.auth.initializeAdmin('839201');
@@ -26,6 +32,9 @@ void main() {
     repo.auth.logout();
   });
   tearDown(() async {
+    final view = TestWidgetsFlutterBinding.instance.platformDispatcher.implicitView!;
+    view.resetPhysicalSize();
+    view.resetDevicePixelRatio();
     await database.close();
     await temp.delete(recursive: true);
   });
@@ -83,6 +92,9 @@ void main() {
     await tester.tap(find.textContaining('设置'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 500)));
+    await tester.pump();
+    await tester.scrollUntilVisible(find.textContaining('从相册导入'), 350, scrollable: find.descendant(of: find.byType(SettingsScreen), matching: find.byType(Scrollable)).first);
     expect(find.textContaining('从相册导入'), findsOneWidget);
 
     await tester.tap(find.byTooltip('退出 / Logout'));
@@ -100,6 +112,9 @@ void main() {
     await tester.tap(find.textContaining('设置'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 500)));
+    await tester.pump();
+    await tester.scrollUntilVisible(find.textContaining('仅管理员可更改收款码'), 350, scrollable: find.descendant(of: find.byType(SettingsScreen), matching: find.byType(Scrollable)).first);
     expect(find.textContaining('仅管理员可更改收款码'), findsOneWidget);
     expect(find.textContaining('从相册导入'), findsNothing);
     await tester.pumpWidget(const SizedBox.shrink());
