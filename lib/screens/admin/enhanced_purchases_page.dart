@@ -5,6 +5,7 @@ import '../../models/app_user.dart';
 import '../../models/money.dart';
 import '../../models/product.dart';
 import '../../services/pos_repository.dart';
+import '../../services/purchase_history_sync.dart';
 import '../../services/purchase_invoice_parser.dart';
 import '../../services/purchase_ocr_repository.dart';
 import '../../widgets/money_text.dart';
@@ -28,6 +29,7 @@ class EnhancedPurchasesPage extends StatefulWidget {
 class _EnhancedPurchasesPageState extends State<EnhancedPurchasesPage> {
   List<Map<String, Object?>> _rows = [];
   List<Map<String, Object?>> _drafts = [];
+  String? _historySyncError;
   static const _invoiceParser = PurchaseInvoiceParser();
 
   PurchaseOcrRepository get _ocrRepo => PurchaseOcrRepository(widget.repo);
@@ -39,9 +41,19 @@ class _EnhancedPurchasesPageState extends State<EnhancedPurchasesPage> {
   }
 
   Future<void> _load() async {
+    String? syncError;
+    try {
+      await PurchaseHistorySync(widget.repo).pullFromSavedDesktop();
+    } catch (e) {
+      syncError = '进货历史同步失败：$e';
+    }
     _rows = await widget.repo.listPurchases();
     _drafts = await _ocrRepo.listDrafts();
-    if (mounted) setState(() {});
+    if (mounted) {
+      setState(() {
+        _historySyncError = syncError;
+      });
+    }
   }
 
   Future<void> _openAliases() async {
@@ -359,35 +371,59 @@ class _EnhancedPurchasesPageState extends State<EnhancedPurchasesPage> {
           ),
         ],
       ),
-      body: ListView.builder(
-        itemCount: _rows.length,
-        itemBuilder: (context, i) {
-          final row = _rows[i];
-          return ListTile(
-            title: Text('${row['purchase_no']} · ${row['supplier_name']}'),
-            subtitle: Text(
-              '${row['purchased_at']}'
-              '${row['source'] == 'ocr' ? ' · OCR' : ''}'
-              '${row['reversed'] == 1 ? ' · 已撤销' : ''}',
-            ),
-            trailing: MoneyText(
-              amountCents: (row['total_cents'] as num).toInt(),
-              fontSize: 14,
-            ),
-            onTap: () async {
-              final changed = await Navigator.of(context).push<bool>(
-                MaterialPageRoute(
-                  builder: (_) => PurchaseDetailScreen(
-                    repo: widget.repo,
-                    user: widget.user,
-                    purchaseId: row['id'] as String,
-                  ),
+      body: Column(
+        children: [
+          if (_historySyncError != null)
+            Material(
+              color: const Color(0xFFFFECEC),
+              child: ListTile(
+                dense: true,
+                leading: const Icon(Icons.sync_problem),
+                title: Text(_historySyncError!),
+                trailing: TextButton(
+                  onPressed: _load,
+                  child: const Text('重试'),
                 ),
-              );
-              if (changed == true) await _load();
-            },
-          );
-        },
+              ),
+            ),
+          Expanded(
+            child: RefreshIndicator(
+              onRefresh: _load,
+              child: ListView.builder(
+                physics: const AlwaysScrollableScrollPhysics(),
+                itemCount: _rows.length,
+                itemBuilder: (context, i) {
+                  final row = _rows[i];
+                  return ListTile(
+                    title: Text('${row['purchase_no']} · ${row['supplier_name']}'),
+                    subtitle: Text(
+                      '${row['purchased_at']}'
+                      '${row['source'] == 'ocr' ? ' · OCR' : ''}'
+                      '${row['source'] == 'desktop' ? ' · Desktop' : ''}'
+                      '${row['reversed'] == 1 ? ' · 已撤销' : ''}',
+                    ),
+                    trailing: MoneyText(
+                      amountCents: (row['total_cents'] as num).toInt(),
+                      fontSize: 14,
+                    ),
+                    onTap: () async {
+                      final changed = await Navigator.of(context).push<bool>(
+                        MaterialPageRoute(
+                          builder: (_) => PurchaseDetailScreen(
+                            repo: widget.repo,
+                            user: widget.user,
+                            purchaseId: row['id'] as String,
+                          ),
+                        ),
+                      );
+                      if (changed == true) await _load();
+                    },
+                  );
+                },
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
