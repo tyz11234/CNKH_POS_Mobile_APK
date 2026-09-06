@@ -697,6 +697,7 @@ class LanSyncClient {
             'items': [
               for (final m in rows)
                 {
+                  'operation_id': m['id'],
                   'product_id': m['product_id'],
                   'barcode': m['barcode'],
                   'product_name': m['product_name'],
