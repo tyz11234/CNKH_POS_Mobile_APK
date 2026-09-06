@@ -269,6 +269,7 @@ Desktop 的 `/api/v1/purchases` 会把结构化 Purchase History 同步到 Mobil
 - Desktop-origin Purchase 的 Mobile 详情页是只读页面，不提供本地 Reverse。
 - 即使绕过 UI 调用 Repository，服务层与 SQLite trigger 也会阻止对 `desktop_sync` Purchase 执行 Mobile 本地库存反转。
 - Mobile 自己建立并上传的 Purchase 会识别为原记录，不会被 Desktop History 回传复制成第二张进货单。
+- Client 支持 `since` / `cursor` 增量 reconciliation；若 Host 为兼容模式返回完整历史，稳定 ID 与幂等写入仍保证不会触发第二次库存 mutation。
 
 ## Original Invoice 附件同步
 
