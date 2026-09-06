@@ -31,6 +31,7 @@
 - OCR P0 全部阻断安全规则。
 - Original / Preview 分离。
 - Original Invoice 独立附件 Outbox + SHA-256 + Lost-ACK retry。
+- Desktop → Mobile Purchase History 只读同步，不二次改库存。
 - Supplier Product Alias 查看 / 编辑 / 删除。
 - OCR v8 正式 Migration 与旧数据保留。
 - Pairing QR expiry / Token revoke / same-host Token rotation。
@@ -256,6 +257,19 @@ Reverse 不是删除 Purchase。
 
 重复 Reverse 使用幂等保护，不会重复扣库存。
 
+## Desktop Purchase History 只读同步
+
+Desktop 的 `/api/v1/purchases` 会把结构化 Purchase History 同步到 Mobile，包括 Supplier、Invoice、费用、商品明细、OCR evidence 与 Reverse 状态。
+
+安全规则：
+
+- Desktop 新建的 Purchase 在 Mobile 以 `desktop_sync` 历史记录保存，并使用稳定的远端 ID 映射。
+- 拉取历史记录**不会执行本地进货库存增加、成本更新或 stock move**。
+- Desktop 后续 Reverse 时，Mobile 只同步 Reverse 状态/原因，不会再次扣减库存；库存最终值仍由 Desktop Catalog 权威同步。
+- Desktop-origin Purchase 的 Mobile 详情页是只读页面，不提供本地 Reverse。
+- 即使绕过 UI 调用 Repository，服务层与 SQLite trigger 也会阻止对 `desktop_sync` Purchase 执行 Mobile 本地库存反转。
+- Mobile 自己建立并上传的 Purchase 会识别为原记录，不会被 Desktop History 回传复制成第二张进货单。
+
 ## Original Invoice 附件同步
 
 确认 OCR Purchase 后，Original Invoice 不会只停留在手机本地路径。
@@ -418,6 +432,7 @@ Full Fix 自动化重点包括：
 - Draft commit idempotency
 - Duplicate invoice / Admin override
 - Safe Reverse after later stock moves
+- Desktop → Mobile Purchase History reconciliation / read-only stock safety
 - Original/Preview lifecycle
 - Attachment outbox status / hash / Lost ACK
 - v8 migration preserving old data/outbox
