@@ -9,6 +9,7 @@ import '../../services/purchase_history_sync.dart';
 import '../../services/purchase_invoice_parser.dart';
 import '../../services/purchase_ocr_repository.dart';
 import '../../widgets/money_text.dart';
+import 'desktop_purchase_history_page.dart';
 import 'purchase_ocr_screen.dart';
 import 'supplier_aliases_page.dart';
 
@@ -394,12 +395,13 @@ class _EnhancedPurchasesPageState extends State<EnhancedPurchasesPage> {
                 itemCount: _rows.length,
                 itemBuilder: (context, i) {
                   final row = _rows[i];
+                  final desktopHistory = row['source'] == 'desktop_sync';
                   return ListTile(
                     title: Text('${row['purchase_no']} · ${row['supplier_name']}'),
                     subtitle: Text(
                       '${row['purchased_at']}'
                       '${row['source'] == 'ocr' ? ' · OCR' : ''}'
-                      '${row['source'] == 'desktop' ? ' · Desktop' : ''}'
+                      '${desktopHistory ? ' · Desktop' : ''}'
                       '${row['reversed'] == 1 ? ' · 已撤销' : ''}',
                     ),
                     trailing: MoneyText(
@@ -407,6 +409,16 @@ class _EnhancedPurchasesPageState extends State<EnhancedPurchasesPage> {
                       fontSize: 14,
                     ),
                     onTap: () async {
+                      if (desktopHistory) {
+                        await Navigator.of(context).push<void>(
+                          MaterialPageRoute(
+                            builder: (_) => DesktopPurchaseHistoryPage(
+                              purchase: row,
+                            ),
+                          ),
+                        );
+                        return;
+                      }
                       final changed = await Navigator.of(context).push<bool>(
                         MaterialPageRoute(
                           builder: (_) => PurchaseDetailScreen(
