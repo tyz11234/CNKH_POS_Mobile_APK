@@ -85,7 +85,10 @@ class PurchaseValidationService {
     }
 
     final previousCost = history.lastUnitCostCents;
-    if (previousCost != null && previousCost > 0 && line.conversionFactor.isFinite && line.conversionFactor > 0) {
+    if (previousCost != null &&
+        previousCost > 0 &&
+        line.conversionFactor.isFinite &&
+        line.conversionFactor > 0) {
       final currentBaseCost = line.baseUnitCostCents;
       final ratio = (currentBaseCost - previousCost).abs() / previousCost;
       if (ratio >= costChangeWarningRatio) {
@@ -116,7 +119,12 @@ class PurchaseValidationService {
       ));
     }
     final invoiceTotal = draft.invoiceTotalCents;
-    if (invoiceTotal != null) {
+    if (invoiceTotal == null) {
+      out.add(const PurchaseWarning(
+        code: 'invoice_total_missing',
+        message: '未可靠识别单据总额，请人工核对系统计算总额后再确认入库。',
+      ));
+    } else {
       final delta = (draft.calculatedTotalCents - invoiceTotal).abs();
       if (delta > invoiceToleranceCents) {
         out.add(PurchaseWarning(
