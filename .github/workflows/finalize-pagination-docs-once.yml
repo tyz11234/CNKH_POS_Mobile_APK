@@ -1,91 +1,25 @@
 name: Finalize pagination docs once
-
-on:
-  push:
-    branches:
-      - fix/pagination-release-20260906
-
+on: [push]
 permissions:
   contents: write
-
 jobs:
   finalize:
-    if: github.actor != 'github-actions[bot]'
+    if: ${{ github.actor != 'github-actions[bot]' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Checkout fix branch
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           ref: fix/pagination-release-20260906
           fetch-depth: 0
-
-      - name: Update README
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path('README.md')
-          s = p.read_text(encoding='utf-8')
-          heading = '## 2026-09-06 分页与 Release 联网修复\n'
-          if heading not in s:
-              anchor = '## OCR 运行方式\n'
-              section = '''## 2026-09-06 分页与 Release 联网修复
-
-这一轮针对商品数量变大后的截断问题与 Release APK 局域网权限做最小补强，不改变现有收银流程、UI 风格、SQLite 数据结构或 `cnkh-sync:v1` 协议。
-
-### 分页规则
-
-- 收银商品：每页最多 **40** 个，支持上一页 / 下一页；搜索与分类筛选后从第 1 页重新开始。
-- 商品管理、客户、供应商、盘点：每页最多 **50** 条。
-- 销售记录、进货记录、日结历史、审计日志：每页最多 **50** 条。
-- 手动进货的供应商 / 商品选择改为分页查询，不再只取固定前 50 个后就无法访问后续资料。
-- 手动进货数量默认从 `10` 改为 `0`；只有 finite 且 `> 0` 的数量才能提交。
-- 分页查询下沉到 Repository / SQLite，避免把大量数据一次性载入内存再切页。
-- 搜索请求加入版本保护，较慢的旧请求返回时不会覆盖用户已经输入的新查询结果。
-
-分页边界回归至少覆盖 101 商品的 `50 / 50 / 1` 分页，以及客户 / 供应商超过 50 条时的下一页可达性。
-
-### Release APK 联网权限
-
-Release 主 Manifest 明确声明：
-
-```text
-android.permission.INTERNET
-```
-
-Mobile CI 在真正构建 `flutter build apk --release` 后继续验证：
-
-- Release merged `AndroidManifest.xml` 含 INTERNET 权限。
-- 使用 Android SDK `aapt` 检查最终 `app-release.apk` 本体权限。
-- 记录 APK SHA-256，避免把旧 APK 当成新构建结果。
-
-### 最新双端联调
-
-双端 integration 不再固定到旧 Mobile 版本。工作流会记录实际 Mobile / Desktop ref 与 SHA，并对最新配套源码运行真实 localhost HTTP 同步与重连测试。
-
-已覆盖：离线操作顺序、盘点冲突、服务器恢复重连、进货 Lost-ACK 不重复加库存、PC Void 传播等。
-
-真机 Android 局域网测试不由 CI 冒充；若没有连接实体 Android 手机，会明确标记为未执行。
-
-'''
-              if anchor not in s:
-                  raise SystemExit('README anchor not found')
-              s = s.replace(anchor, section + anchor, 1)
-              p.write_text(s, encoding='utf-8')
-          PY
-
-      - name: Commit README
-        shell: bash
+      - run: python3 tools/finalize_pagination_docs_once.py
+      - shell: bash
         run: |
           set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add README.md
-          if git diff --cached --quiet; then
-            echo 'No changes to commit'
-            exit 0
-          fi
+          if git diff --cached --quiet; then exit 0; fi
           git diff --cached --check
           git commit -m 'Document pagination and release networking fixes'
           git push origin HEAD:fix/pagination-release-20260906
