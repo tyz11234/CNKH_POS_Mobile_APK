@@ -10,16 +10,31 @@
 |---|---|
 | Mobile 源码 | **1.9.0+25** |
 | OCR 版本 | **v1.9.0 OCR Purchase** |
-| 最近正式 Release | **`v1.8.2-mobile`**；`v1.9.0-mobile` 正在由正式分支 CI 生成 |
+| 当前正式 Release | **`v1.9.0-mobile`** |
 | 对应 Desktop | **Desktop `main` 已包含 OCR 进货同步兼容** |
 | LAN 协议 | `cnkh-sync:v1`，未更换协议版本 |
 | 更新日期 | **2026-09-06** |
 
-Mobile v1.9.0 正式构建：
-https://github.com/tyz11234/CNKH_POS_Mobile_APK/actions/runs/34023967305
+Mobile v1.9.0 Release：
+https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/tag/v1.9.0-mobile
 
-Mobile Releases：
-https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases
+正式 APK：
+https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/download/v1.9.0-mobile/CNKH_POS_Mobile.apk
+
+版本化 APK：
+https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/download/v1.9.0-mobile/CNKH_POS_Mobile_v1.9.0.apk
+
+本次 Release 固定到源码提交：
+
+```text
+46a5bc941eb05a58b16361518a0af9429d258174
+```
+
+APK SHA-256：
+
+```text
+1b892b8fd8f6760cf11fdbf1f1edeef1956229237dcccb320eb26f0307f09d5c
+```
 
 Desktop：
 https://github.com/tyz11234/CNKH_POS_Desktop
@@ -317,7 +332,7 @@ flutter test
 flutter build apk --release
 ```
 
-v1.9.0 OCR 开发分支已经验证：
+v1.9.0 OCR 正式构建已验证：
 
 - `flutter pub get`：通过
 - `flutter analyze`：通过
@@ -325,14 +340,17 @@ v1.9.0 OCR 开发分支已经验证：
 - Android Release APK：通过
 - R8 release shrink：通过
 - Chinese + Latin ML Kit bundled model：通过 Release 打包
+- APK artifact 上传：通过
+- GitHub Release 创建：通过
 - Desktop / Mobile 既有 LAN 联调回归：通过
 
-正式 `source/main` CI 会再次执行完整 Analyze、测试、Release APK 构建并创建版本化 Release。
+正式构建记录：
+https://github.com/tyz11234/CNKH_POS_Mobile_APK/actions/runs/34023967305
 
 ## 正式发布规则
 
 - 当前源码版本：`1.9.0+25`
-- v1.9.0 Release tag：`v1.9.0-mobile`
+- 当前正式 tag：`v1.9.0-mobile`
 - 正式 APK 只从 GitHub Releases 下载
 - 功能 / 修复先在功能分支完成，通过 CI 后再进入 `source/main`
 - Release APK 与源码必须可追溯到对应构建提交
