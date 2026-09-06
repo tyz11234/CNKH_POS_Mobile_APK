@@ -159,6 +159,25 @@ CREATE TABLE IF NOT EXISTS purchase_reversals (
   FOREIGN KEY(purchase_id) REFERENCES purchases(id) ON DELETE CASCADE
 )''');
 
+  // Desktop-origin records are history mirrors only. Their inventory has already
+  // been reconciled by catalog sync, so a local reverse must abort the entire
+  // transaction before it can double-adjust stock. A reversal already performed
+  // on Desktop is allowed to mirror because the purchase row is first marked
+  // reversed=1 by PurchaseHistorySync.
+  await db.execute('''
+CREATE TRIGGER IF NOT EXISTS block_local_reverse_of_desktop_purchase
+BEFORE INSERT ON purchase_reversals
+WHEN EXISTS (
+  SELECT 1 FROM purchases
+   WHERE id=NEW.purchase_id
+     AND source='desktop_sync'
+     AND COALESCE(reversed,0)=0
+)
+BEGIN
+  SELECT RAISE(ABORT, 'Desktop synced purchase history cannot be reversed on Mobile');
+END
+''');
+
   // A draft may be retried after a UI double tap, app restart, timeout or lost ACK.
   // Reserving the draft id in the same transaction as the stock mutation makes
   // the commit idempotent without relying on timing in the UI.
