@@ -19,14 +19,16 @@ import '../../theme/cnkh_theme.dart';
 class PurchaseOcrScreen extends StatefulWidget {
   final PosRepository repo;
   final AppUser user;
-  final ImageSource source;
+  final ImageSource? source;
+  final String? draftId;
 
   const PurchaseOcrScreen({
     super.key,
     required this.repo,
     required this.user,
-    required this.source,
-  });
+    this.source,
+    this.draftId,
+  }) : assert(source != null || draftId != null);
 
   @override
   State<PurchaseOcrScreen> createState() => _PurchaseOcrScreenState();
@@ -58,23 +60,32 @@ class _PurchaseOcrScreenState extends State<PurchaseOcrScreen> {
 
   Future<void> _start() async {
     try {
-      final picked = await ImagePicker().pickImage(source: widget.source);
-      if (picked == null) {
-        if (mounted) Navigator.pop(context);
-        return;
-      }
-      final draftId = AppDatabase.newId();
-      final savedPath = await _imageStore.saveCompressed(picked.path, draftId);
-      final rawText = await _recognizer.recognizeFile(savedPath);
-      var draft = _parser.parse(
-        rawText,
-        draftId: draftId,
-        createdBy: widget.user.username,
-        imagePath: savedPath,
-      );
       _suppliers = await widget.repo.listSuppliers();
       _products = await widget.repo.searchProducts('', limit: 5000);
-      draft = await _ocrRepo.prepareDraft(draft);
+
+      PurchaseDraft draft;
+      final existingDraftId = widget.draftId;
+      if (existingDraftId != null) {
+        final saved = await _ocrRepo.loadDraft(existingDraftId);
+        if (saved == null) throw StateError('OCR 草稿不存在或已处理');
+        draft = await _ocrRepo.validateDraft(saved);
+      } else {
+        final picked = await ImagePicker().pickImage(source: widget.source!);
+        if (picked == null) {
+          if (mounted) Navigator.pop(context);
+          return;
+        }
+        final draftId = AppDatabase.newId();
+        final savedPath = await _imageStore.saveCompressed(picked.path, draftId);
+        final rawText = await _recognizer.recognizeFile(savedPath);
+        draft = _parser.parse(
+          rawText,
+          draftId: draftId,
+          createdBy: widget.user.username,
+          imagePath: savedPath,
+        );
+        draft = await _ocrRepo.prepareDraft(draft);
+      }
       await _ocrRepo.saveDraft(draft);
       if (!mounted) return;
       setState(() {
@@ -126,8 +137,10 @@ class _PurchaseOcrScreenState extends State<PurchaseOcrScreen> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Text('OCR：${line.rawProductName}',
-                      style: const TextStyle(fontWeight: FontWeight.w700)),
+                  Text(
+                    'OCR：${line.rawProductName}',
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
                   const SizedBox(height: 10),
                   DropdownButtonFormField<String>(
                     value: productId,
@@ -181,8 +194,14 @@ class _PurchaseOcrScreenState extends State<PurchaseOcrScreen> {
             ),
           ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
-            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('保存')),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('保存'),
+            ),
           ],
         ),
       ),
@@ -228,8 +247,16 @@ class _PurchaseOcrScreenState extends State<PurchaseOcrScreen> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              TextField(controller: no, decoration: const InputDecoration(labelText: 'Invoice No')),
-              TextField(controller: date, decoration: const InputDecoration(labelText: 'Invoice Date (YYYY-MM-DD)')),
+              TextField(
+                controller: no,
+                decoration: const InputDecoration(labelText: 'Invoice No'),
+              ),
+              TextField(
+                controller: date,
+                decoration: const InputDecoration(
+                  labelText: 'Invoice Date (YYYY-MM-DD)',
+                ),
+              ),
               _moneyField(discount, 'Discount'),
               _moneyField(tax, 'Tax / SST'),
               _moneyField(delivery, 'Delivery / Freight'),
@@ -239,8 +266,14 @@ class _PurchaseOcrScreenState extends State<PurchaseOcrScreen> {
           ),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('保存')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('保存'),
+          ),
         ],
       ),
     );
@@ -291,7 +324,9 @@ class _PurchaseOcrScreenState extends State<PurchaseOcrScreen> {
     if (draft.hasBlockingIssues) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('请先处理红色错误和未匹配商品，OCR 不会直接入库。')),
+          const SnackBar(
+            content: Text('请先处理红色错误和未匹配商品，OCR 不会直接入库。'),
+          ),
         );
       }
       return;
@@ -309,12 +344,21 @@ class _PurchaseOcrScreenState extends State<PurchaseOcrScreen> {
             width: 520,
             child: ListView(
               shrinkWrap: true,
-              children: warnings.take(12).map((w) => Text('• ${w.message}')).toList(),
+              children: warnings
+                  .take(12)
+                  .map((w) => Text('• ${w.message}'))
+                  .toList(),
             ),
           ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('继续检查')),
-            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('确认入库')),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('继续检查'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('确认入库'),
+            ),
           ],
         ),
       );
@@ -331,7 +375,9 @@ class _PurchaseOcrScreenState extends State<PurchaseOcrScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _busy = false);
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('$e')),
+      );
     }
   }
 
@@ -343,9 +389,16 @@ class _PurchaseOcrScreenState extends State<PurchaseOcrScreen> {
         content: SizedBox(
           width: 600,
           height: 420,
-          child: SingleChildScrollView(child: SelectableText(_draft!.ocrRawText)),
+          child: SingleChildScrollView(
+            child: SelectableText(_draft!.ocrRawText),
+          ),
         ),
-        actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('关闭'))],
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('关闭'),
+          ),
+        ],
       ),
     );
   }
@@ -355,14 +408,14 @@ class _PurchaseOcrScreenState extends State<PurchaseOcrScreen> {
     if (_busy && _draft == null) {
       return Scaffold(
         appBar: AppBar(title: const Text('OCR 进货 / OCR Purchase')),
-        body: const Center(
+        body: Center(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              CircularProgressIndicator(),
-              SizedBox(height: 12),
-              Text('正在本机识别进货单…'),
-              Text('OCR 结果只会生成草稿，不会自动改库存。'),
+              const CircularProgressIndicator(),
+              const SizedBox(height: 12),
+              Text(widget.draftId == null ? '正在本机识别进货单…' : '正在载入 OCR 草稿…'),
+              const Text('OCR 结果只会生成草稿，不会自动改库存。'),
             ],
           ),
         ),
@@ -379,13 +432,13 @@ class _PurchaseOcrScreenState extends State<PurchaseOcrScreen> {
               children: [
                 const Icon(Icons.error_outline, size: 48),
                 const SizedBox(height: 12),
-                const Text('OCR 识别失败，库存没有任何变化。'),
+                const Text('OCR 草稿处理失败，库存没有任何变化。'),
                 const SizedBox(height: 8),
                 Text(_error!, textAlign: TextAlign.center),
                 const SizedBox(height: 16),
                 FilledButton(
                   onPressed: () => Navigator.pop(context),
-                  child: const Text('返回手动进货'),
+                  child: const Text('返回进货'),
                 ),
               ],
             ),
@@ -407,8 +460,16 @@ class _PurchaseOcrScreenState extends State<PurchaseOcrScreen> {
       appBar: AppBar(
         title: const Text('OCR 进货 / OCR Purchase'),
         actions: [
-          IconButton(onPressed: _showRawText, tooltip: 'OCR 原文', icon: const Icon(Icons.text_snippet_outlined)),
-          IconButton(onPressed: _editFees, tooltip: '单据金额', icon: const Icon(Icons.calculate_outlined)),
+          IconButton(
+            onPressed: _showRawText,
+            tooltip: 'OCR 原文',
+            icon: const Icon(Icons.text_snippet_outlined),
+          ),
+          IconButton(
+            onPressed: _editFees,
+            tooltip: '单据金额',
+            icon: const Icon(Icons.calculate_outlined),
+          ),
         ],
       ),
       bottomNavigationBar: SafeArea(
@@ -449,7 +510,11 @@ class _PurchaseOcrScreenState extends State<PurchaseOcrScreen> {
           if (draft.imagePath.isNotEmpty && File(draft.imagePath).existsSync())
             ClipRRect(
               borderRadius: BorderRadius.circular(12),
-              child: Image.file(File(draft.imagePath), height: 180, fit: BoxFit.cover),
+              child: Image.file(
+                File(draft.imagePath),
+                height: 180,
+                fit: BoxFit.cover,
+              ),
             ),
           const SizedBox(height: 12),
           Card(
@@ -459,8 +524,12 @@ class _PurchaseOcrScreenState extends State<PurchaseOcrScreen> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   DropdownButtonFormField<String>(
-                    value: (draft.supplierId ?? '').isEmpty ? null : draft.supplierId,
-                    decoration: const InputDecoration(labelText: '供应商 / Supplier'),
+                    value: (draft.supplierId ?? '').isEmpty
+                        ? null
+                        : draft.supplierId,
+                    decoration: const InputDecoration(
+                      labelText: '供应商 / Supplier',
+                    ),
                     items: [
                       for (final s in _suppliers)
                         DropdownMenuItem(value: s.id, child: Text(s.name)),
@@ -468,13 +537,21 @@ class _PurchaseOcrScreenState extends State<PurchaseOcrScreen> {
                     onChanged: _selectSupplier,
                   ),
                   const SizedBox(height: 8),
-                  Text('Invoice: ${draft.invoiceNo.isEmpty ? '未识别' : draft.invoiceNo}'),
-                  Text('Date: ${draft.invoiceDate.isEmpty ? '未识别' : draft.invoiceDate}'),
+                  Text(
+                    'Invoice: ${draft.invoiceNo.isEmpty ? '未识别' : draft.invoiceNo}',
+                  ),
+                  Text(
+                    'Date: ${draft.invoiceDate.isEmpty ? '未识别' : draft.invoiceDate}',
+                  ),
                   const SizedBox(height: 8),
                   Text('商品行 ${draft.lines.length} · 警告/提示 $warningCount'),
                   Text('商品小计 ${formatRm(draft.linesSubtotalCents)}'),
-                  Text('Discount -${formatRm(draft.discountCents)} · SST ${formatRm(draft.taxCents)}'),
-                  Text('Delivery ${formatRm(draft.deliveryFeeCents)} · Other ${formatRm(draft.otherFeeCents)}'),
+                  Text(
+                    'Discount -${formatRm(draft.discountCents)} · SST ${formatRm(draft.taxCents)}',
+                  ),
+                  Text(
+                    'Delivery ${formatRm(draft.deliveryFeeCents)} · Other ${formatRm(draft.otherFeeCents)}',
+                  ),
                   Text(
                     '系统计算 ${formatRm(draft.calculatedTotalCents)} · 单据 ${draft.invoiceTotalCents == null ? '未识别' : formatRm(draft.invoiceTotalCents!)}',
                     style: const TextStyle(fontWeight: FontWeight.w800),
@@ -497,9 +574,12 @@ class _PurchaseOcrScreenState extends State<PurchaseOcrScreen> {
           ...visible.map((entry) {
             final line = entry.value;
             final product = line.isMatched
-                ? _products.where((p) => p.id == line.matchedProductId).firstOrNull
+                ? _products
+                    .where((p) => p.id == line.matchedProductId)
+                    .firstOrNull
                 : null;
-            final stockAfter = product == null ? null : product.stock + line.stockQuantity;
+            final stockAfter =
+                product == null ? null : product.stock + line.stockQuantity;
             return Card(
               child: InkWell(
                 onTap: () => _editLine(entry.key),
@@ -508,15 +588,19 @@ class _PurchaseOcrScreenState extends State<PurchaseOcrScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(line.rawProductName,
-                          style: const TextStyle(fontWeight: FontWeight.w800)),
+                      Text(
+                        line.rawProductName,
+                        style: const TextStyle(fontWeight: FontWeight.w800),
+                      ),
                       const SizedBox(height: 3),
                       Text(
                         line.isMatched
                             ? '→ ${line.matchedProductName} · ${(line.matchConfidence * 100).round()}%'
                             : '→ 未匹配 / Unmatched',
                         style: TextStyle(
-                          color: line.isMatched ? CnkhColors.muted : CnkhColors.danger,
+                          color: line.isMatched
+                              ? CnkhColors.muted
+                              : CnkhColors.danger,
                         ),
                       ),
                       const SizedBox(height: 4),
@@ -526,7 +610,10 @@ class _PurchaseOcrScreenState extends State<PurchaseOcrScreen> {
                       if (product != null)
                         Text(
                           '库存 ${product.stock} → ${stockAfter?.toStringAsFixed(2)} ${product.unit} · 成本 ${formatRm(product.costCents)} → ${formatRm(line.baseUnitCostCents)}',
-                          style: const TextStyle(fontSize: 12, color: CnkhColors.muted),
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: CnkhColors.muted,
+                          ),
                         ),
                       for (final w in line.warnings) _warningInline(w),
                       const Align(
@@ -603,10 +690,12 @@ class _PurchaseDetailScreenState extends State<PurchaseDetailScreen> {
 
   Future<void> _load() async {
     final row = await _ocrRepo.getPurchase(widget.purchaseId);
-    if (mounted) setState(() {
-      _purchase = row;
-      _loading = false;
-    });
+    if (mounted) {
+      setState(() {
+        _purchase = row;
+        _loading = false;
+      });
+    }
   }
 
   Future<void> _reverse() async {
@@ -624,20 +713,41 @@ class _PurchaseDetailScreenState extends State<PurchaseDetailScreen> {
               DropdownButtonFormField<String>(
                 value: reason,
                 items: const [
-                  DropdownMenuItem(value: 'Duplicate entry', child: Text('重复入库')),
-                  DropdownMenuItem(value: 'OCR error', child: Text('OCR 识别错误')),
-                  DropdownMenuItem(value: 'Supplier invoice error', child: Text('供应商单据错误')),
-                  DropdownMenuItem(value: 'Cancelled', child: Text('进货取消')),
+                  DropdownMenuItem(
+                    value: 'Duplicate entry',
+                    child: Text('重复入库'),
+                  ),
+                  DropdownMenuItem(
+                    value: 'OCR error',
+                    child: Text('OCR 识别错误'),
+                  ),
+                  DropdownMenuItem(
+                    value: 'Supplier invoice error',
+                    child: Text('供应商单据错误'),
+                  ),
+                  DropdownMenuItem(
+                    value: 'Cancelled',
+                    child: Text('进货取消'),
+                  ),
                   DropdownMenuItem(value: 'Other', child: Text('其他')),
                 ],
                 onChanged: (v) => setLocal(() => reason = v ?? reason),
               ),
-              TextField(controller: notes, decoration: const InputDecoration(labelText: '备注')),
+              TextField(
+                controller: notes,
+                decoration: const InputDecoration(labelText: '备注'),
+              ),
             ],
           ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
-            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('确认撤销')),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('确认撤销'),
+            ),
           ],
         ),
       ),
@@ -657,7 +767,11 @@ class _PurchaseDetailScreenState extends State<PurchaseDetailScreen> {
         );
       }
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('$e')),
+        );
+      }
     }
   }
 
@@ -666,8 +780,17 @@ class _PurchaseDetailScreenState extends State<PurchaseDetailScreen> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('OCR 原文'),
-        content: SizedBox(width: 600, height: 420, child: SingleChildScrollView(child: SelectableText(raw))),
-        actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('关闭'))],
+        content: SizedBox(
+          width: 600,
+          height: 420,
+          child: SingleChildScrollView(child: SelectableText(raw)),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('关闭'),
+          ),
+        ],
       ),
     );
   }
@@ -675,11 +798,17 @@ class _PurchaseDetailScreenState extends State<PurchaseDetailScreen> {
   @override
   Widget build(BuildContext context) {
     if (_loading) {
-      return Scaffold(appBar: AppBar(title: const Text('进货详情')), body: const Center(child: CircularProgressIndicator()));
+      return Scaffold(
+        appBar: AppBar(title: const Text('进货详情')),
+        body: const Center(child: CircularProgressIndicator()),
+      );
     }
     final p = _purchase;
     if (p == null) {
-      return Scaffold(appBar: AppBar(title: const Text('进货详情')), body: const Center(child: Text('记录不存在')));
+      return Scaffold(
+        appBar: AppBar(title: const Text('进货详情')),
+        body: const Center(child: Text('记录不存在')),
+      );
     }
     final lines = (jsonDecode(p['lines_json'] as String) as List)
         .map((e) => Map<String, dynamic>.from(e as Map))
@@ -692,7 +821,10 @@ class _PurchaseDetailScreenState extends State<PurchaseDetailScreen> {
         title: Text('${p['purchase_no']}'),
         actions: [
           if (rawText.isNotEmpty)
-            IconButton(onPressed: () => _showRaw(rawText), icon: const Icon(Icons.text_snippet_outlined)),
+            IconButton(
+              onPressed: () => _showRaw(rawText),
+              icon: const Icon(Icons.text_snippet_outlined),
+            ),
         ],
       ),
       body: ListView(
@@ -701,7 +833,11 @@ class _PurchaseDetailScreenState extends State<PurchaseDetailScreen> {
           if (imagePath.isNotEmpty && File(imagePath).existsSync())
             ClipRRect(
               borderRadius: BorderRadius.circular(12),
-              child: Image.file(File(imagePath), height: 200, fit: BoxFit.cover),
+              child: Image.file(
+                File(imagePath),
+                height: 200,
+                fit: BoxFit.cover,
+              ),
             ),
           Card(
             child: ListTile(
@@ -725,20 +861,30 @@ class _PurchaseDetailScreenState extends State<PurchaseDetailScreen> {
               ),
             ),
           ),
-          ...lines.map((line) => ListTile(
-                title: Text(line['name']?.toString() ?? line['rawProductName']?.toString() ?? ''),
-                subtitle: Text(
-                  '${line['invoiceQty'] ?? line['qty']} ${line['unit'] ?? ''} × '
-                  '${formatRm((line['invoiceUnitCostCents'] as num?)?.toInt() ?? (line['unitCostCents'] as num?)?.toInt() ?? 0)}',
-                ),
-                trailing: Text(formatRm((line['subtotalCents'] as num?)?.toInt() ?? 0)),
-              )),
+          ...lines.map(
+            (line) => ListTile(
+              title: Text(
+                line['name']?.toString() ??
+                    line['rawProductName']?.toString() ??
+                    '',
+              ),
+              subtitle: Text(
+                '${line['invoiceQty'] ?? line['qty']} ${line['unit'] ?? ''} × '
+                '${formatRm((line['invoiceUnitCostCents'] as num?)?.toInt() ?? (line['unitCostCents'] as num?)?.toInt() ?? 0)}',
+              ),
+              trailing: Text(
+                formatRm((line['subtotalCents'] as num?)?.toInt() ?? 0),
+              ),
+            ),
+          ),
           if (reversed)
             Card(
               color: const Color(0xFFFFECEC),
               child: ListTile(
                 title: const Text('此进货已撤销'),
-                subtitle: Text('${p['reversed_at'] ?? ''}\n${p['reversal_reason'] ?? ''} ${p['reversal_notes'] ?? ''}'),
+                subtitle: Text(
+                  '${p['reversed_at'] ?? ''}\n${p['reversal_reason'] ?? ''} ${p['reversal_notes'] ?? ''}',
+                ),
               ),
             ),
           if (widget.user.isAdmin && !reversed)
