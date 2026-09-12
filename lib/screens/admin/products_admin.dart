@@ -312,8 +312,13 @@ class _ProductsAdminPageState extends State<ProductsAdminPage> {
       imagePath: imagePath,
       reorderLevel: double.tryParse(reorder.text.trim()) ?? 0,
     );
-    await widget.repo.upsertProduct(p);
-    await _load();
+    try {
+      await widget.repo.upsertProduct(p, original: existing);
+      await _load();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
+    }
   }
 
   Future<bool> _confirmDeleteProducts(List<Product> products) async {

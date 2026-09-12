@@ -225,7 +225,8 @@ class PosRepository {
       offset: offset,
     );
     // Keep the original exact-barcode preference inside each stable page.
-    rows.sort((a, b) {
+    final sortedRows = rows.toList();
+    sortedRows.sort((a, b) {
       final ab = (a['barcode'] as String?) ?? '';
       final bb = (b['barcode'] as String?) ?? '';
       if (ab == q && bb != q) return -1;
@@ -236,7 +237,7 @@ class PosRepository {
       if (byName != 0) return byName;
       return (a['id'] as String).compareTo(b['id'] as String);
     });
-    return rows.map(Product.fromMap).toList();
+    return sortedRows.map(Product.fromMap).toList();
   }
 
   Future<int> countProducts(String query, {String? category}) async {
@@ -292,15 +293,15 @@ class PosRepository {
     return Product.fromMap(rows.first);
   }
 
-  Future<void> upsertProduct(Product p) async {
+  Future<void> upsertProduct(Product p, {Product? original}) async {
     if (p.priceCents < 0 || p.costCents < 0 || !p.stock.isFinite)
       throw ArgumentError('商品资料无效');
-    await _saveEntity('product', 'products', p.toMap());
+    await _saveEntity('product', 'products', p.toMap(), original: original?.toMap());
   }
 
   Future<void> softDeleteProduct(String id) async {
     final p = await getProduct(id);
-    if (p != null) await upsertProduct(p.copyWith(isDeleted: 1));
+    if (p != null) await upsertProduct(p.copyWith(isDeleted: 1), original: p);
   }
 
   Future<void> adjustStock({
@@ -371,12 +372,41 @@ class PosRepository {
   Future<void> _saveEntity(
     String entity,
     String table,
-    Map<String, Object?> row,
-  ) async {
+    Map<String, Object?> row, {
+    Map<String, Object?>? original,
+  }) async {
     final d = await _db.db;
     await d.transaction((txn) async {
       final id = row['id'] as String;
       final old = await txn.query(table, where: 'id=?', whereArgs: [id]);
+      if (original != null) {
+        if (original['id'] != id || old.isEmpty ||
+            (old.first['is_deleted'] == 1 && original['is_deleted'] != 1)) {
+          throw StateError('商品已删除或变更，请刷新后重试');
+        }
+        final merged = Map<String, Object?>.from(old.first);
+        for (final entry in row.entries) {
+          if (entry.value == original[entry.key]) continue;
+          if (old.first[entry.key] != original[entry.key] &&
+              old.first[entry.key] != entry.value) {
+            throw StateError('商品资料已变动，请刷新后重试：${entry.key}');
+          }
+          merged[entry.key] = entry.value;
+        }
+        row = merged;
+      }
+      if (entity == 'product' && old.isNotEmpty &&
+          row['stock'] != old.first['stock']) {
+        await txn.insert('stock_moves', {
+          'id': AppDatabase.newId(),
+          'product_id': id,
+          'change': (row['stock'] as num) - (old.first['stock'] as num),
+          'reason': 'product_edit',
+          'created_at': DateTime.now().toIso8601String(),
+          'operator': 'product-editor',
+          'notes': '商品编辑调整库存',
+        });
+      }
       await txn.insert(
         table,
         row,
