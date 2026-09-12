@@ -10,6 +10,7 @@ import '../models/purchase_ocr.dart';
 import 'pos_repository.dart';
 import 'product_match_service.dart';
 import 'purchase_validation_service.dart';
+import 'purchase_reverse_plan.dart';
 import 'sync_store.dart';
 
 class PurchaseOcrRepository {
@@ -841,80 +842,18 @@ class PurchaseOcrRepository {
         limit: 1,
       )).isNotEmpty) return;
 
-      final lines = (jsonDecode(purchase['lines_json'] as String) as List)
-          .map((e) => Map<String, dynamic>.from(e as Map))
-          .toList();
-      final purchasedAt = purchase['purchased_at']?.toString() ?? '';
       final purchaseNo = purchase['purchase_no']?.toString() ?? '';
       final now = DateTime.now().toIso8601String();
-      final planned = <Map<String, Object?>>[];
-
-      for (final line in lines) {
-        final productId = line['productId']?.toString() ?? '';
-        final qty = (line['qty'] as num?)?.toDouble() ?? 0;
-        if (productId.isEmpty || !qty.isFinite || qty <= 0) {
-          throw StateError('原进货商品资料无效，无法安全撤销');
-        }
-        final productRows = await txn.query(
-          'products',
-          where: 'id=? AND is_deleted=0',
-          whereArgs: [productId],
-          limit: 1,
-        );
-        if (productRows.isEmpty) {
-          throw StateError('原进货商品已不存在，无法撤销');
-        }
-        final currentStock = (productRows.first['stock'] as num).toDouble();
-        if (!currentStock.isFinite || currentStock + 0.0000001 < qty) {
-          throw StateError(
-            '该进货后的库存已经发生后续变化，无法安全直接撤销，请使用库存调整或人工处理。',
-          );
-        }
-
-        final moves = await txn.query(
-          'stock_moves',
-          columns: ['reason', 'created_at', 'notes'],
-          where: 'product_id=? AND created_at>=?',
-          whereArgs: [productId, purchasedAt],
-          orderBy: 'created_at ASC',
-        );
-        final hasLaterBusinessMove = moves.any((move) {
-          final isOwnPurchaseMove =
-              move['created_at']?.toString() == purchasedAt &&
-              move['reason']?.toString() == 'purchase' &&
-              move['notes']?.toString() == purchaseNo;
-          return !isOwnPurchaseMove;
-        });
-        if (hasLaterBusinessMove) {
-          throw StateError(
-            '该进货后的库存已经发生后续变化，无法安全直接撤销，请使用库存调整或人工处理。',
-          );
-        }
-
-        final currentCost =
-            (productRows.first['cost_cents'] as num?)?.toInt() ?? 0;
-        final purchaseCost = (line['unitCostCents'] as num?)?.toInt();
-        final beforeCost = (line['beforeCostCents'] as num?)?.toInt();
-        planned.add({
-          'productId': productId,
-          'qty': qty,
-          'currentStock': currentStock,
-          'restoreCost': purchaseCost != null &&
-                  beforeCost != null &&
-                  currentCost == purchaseCost
-              ? beforeCost
-              : null,
-        });
-      }
+      final planned = await planPurchaseReverse(txn, purchase);
 
       for (final change in planned) {
-        final productId = change['productId']! as String;
-        final qty = change['qty']! as double;
+        final productId = change.productId;
+        final qty = change.quantity;
         final update = <String, Object?>{
-          'stock': (change['currentStock']! as double) - qty,
+          'stock': change.currentStock - qty,
         };
-        if (change['restoreCost'] != null) {
-          update['cost_cents'] = change['restoreCost'];
+        if (change.restoreCost != null) {
+          update['cost_cents'] = change.restoreCost;
         }
         await txn.update(
           'products',
