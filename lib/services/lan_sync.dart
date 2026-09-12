@@ -956,6 +956,15 @@ class LanSyncClient {
                   "receipt_no=? AND id<>? AND synced_at IS NOT NULL AND synced_at<>''",
               whereArgs: [canonicalReceipt, id],
             );
+            // Sale reversal locates the original stock deductions by receipt.
+            // Move that reference in the same transaction as the sale rename,
+            // before the old number can be reused by a pulled Desktop sale.
+            await txn.update(
+              'stock_moves',
+              {'notes': canonicalReceipt},
+              where: "notes=? AND reason IN ('sale', 'sale_void')",
+              whereArgs: [m['receipt_no']],
+            );
           }
           await txn.update(
             'sales',
