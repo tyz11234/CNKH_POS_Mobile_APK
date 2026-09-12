@@ -13,6 +13,7 @@ import 'package:sqlite3/open.dart';
 import 'package:uuid/uuid.dart';
 
 import '../models/product.dart';
+import 'document_numbers.dart';
 import 'ocr_purchase_schema.dart';
 import 'reliability_schema.dart';
 
@@ -521,37 +522,57 @@ CREATE TABLE IF NOT EXISTS barcode_print_queue (
   }
 
   Future<String> nextReceiptNo({DatabaseExecutor? executor}) async {
-    final d = executor ?? await db;
+    if (executor == null) {
+      final d = await db;
+      return d.transaction((txn) => nextReceiptNo(executor: txn));
+    }
     final day = DateTime.now()
         .toIso8601String()
         .substring(0, 10)
         .replaceAll('-', '');
-    final device = await _mobileDeviceCode(d);
+    final device = await _mobileDeviceCode(executor);
     final prefix = 'P$day-$device-';
-    final rows = await d.rawQuery(
-      "SELECT COUNT(*) AS c FROM sales WHERE receipt_no LIKE ?",
-      ['$prefix%'],
+    return _reserveNumber(
+      table: 'sales',
+      column: 'receipt_no',
+      prefix: prefix,
+      executor: executor,
     );
-    final c = (rows.first['c'] as int? ?? 0) + 1;
-    return '$prefix${c.toString().padLeft(4, '0')}';
   }
 
-  Future<String> nextHoldNo() async {
-    final d = await db;
-    final n = Sqflite.firstIntValue(
-          await d.rawQuery('SELECT COUNT(*) FROM held_orders'),
-        ) ??
-        0;
-    return 'H-${(n + 1).toString().padLeft(4, '0')}';
-  }
+  Future<String> nextHoldNo() => _reserveNumber(
+    table: 'held_orders',
+    column: 'hold_no',
+    prefix: 'H-',
+  );
 
-  Future<String> nextPurchaseNo() async {
+  Future<String> nextPurchaseNo() => _reserveNumber(
+    table: 'purchases',
+    column: 'purchase_no',
+    prefix: 'PO-',
+  );
+
+  Future<String> _reserveNumber({
+    required String table,
+    required String column,
+    required String prefix,
+    DatabaseExecutor? executor,
+  }) async {
+    if (executor != null) {
+      return reserveDocumentNumber(
+        executor,
+        table: table,
+        column: column,
+        prefix: prefix,
+      );
+    }
     final d = await db;
-    final n = Sqflite.firstIntValue(
-          await d.rawQuery('SELECT COUNT(*) FROM purchases'),
-        ) ??
-        0;
-    return 'PO-${(n + 1).toString().padLeft(4, '0')}';
+    return d.transaction((txn) => reserveDocumentNumber(
+      txn,
+      table: table,
+      column: column,
+      prefix: prefix,
+    ));
   }
 
   static String newId() => const Uuid().v4();
