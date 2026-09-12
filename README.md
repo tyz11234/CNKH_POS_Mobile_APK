@@ -4,7 +4,11 @@
 
 基于 **Flutter / Dart**，使用本地 SQLite 保存业务数据。核心收银与店内同步不依赖云服务器。
 
-> README 最后更新：**2026-09-06**。`main` 为下载与使用说明主页；完整 Flutter 源码位于 [`source/main`](https://github.com/tyz11234/CNKH_POS_Mobile_APK/tree/source/main)。
+> `main` 现已包含完整 Flutter 源码与使用说明，并合入手机版小票库存关联及单号重复修复。`source/main` 保留为兼容源码分支。
+
+`main` 的提交和 Pull Request 会运行 Mobile CI（分析、测试、Release APK 构建）及 Desktop 联调。已有正式 Release 不随源码合并自动更新。
+
+本次合入的源码已通过 67 项 Mobile 测试、6 项双端联调和 Release APK 构建。详细开发说明见 [`source/main` README](https://github.com/tyz11234/CNKH_POS_Mobile_APK/blob/source/main/README.md)。
 
 ## 当前正式版本
 
@@ -334,13 +338,13 @@ https://github.com/tyz11234/CNKH_POS_Mobile_APK/actions/runs/34023967305
 
 | 分支 | 用途 |
 | --- | --- |
-| `main` | 下载、正式状态和使用说明 |
-| `source/main` | 完整 Flutter Mobile 源码 |
+| `main` | 默认源码分支：完整 Flutter 源码、测试、构建配置及使用说明 |
+| `source/main` | 保留的兼容源码分支 |
 
 源码构建：
 
 ```bash
-git clone --branch source/main --single-branch https://github.com/tyz11234/CNKH_POS_Mobile_APK.git
+git clone --branch main --single-branch https://github.com/tyz11234/CNKH_POS_Mobile_APK.git
 cd CNKH_POS_Mobile_APK
 flutter pub get
 flutter analyze --no-fatal-infos --no-fatal-warnings

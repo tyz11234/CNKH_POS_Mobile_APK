@@ -1,0 +1,109 @@
+name: Mobile CI
+
+on:
+  push:
+    branches:
+      - main
+      - source/main
+      - feat/receipt-template-1.6.0
+      - fix/lan-sync-consistency
+    tags:
+      - 'v*-mobile'
+  pull_request:
+    branches:
+      - main
+      - source/main
+      - feat/receipt-template-1.6.0
+
+permissions:
+  contents: write
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Pub get
+        run: flutter pub get
+
+      - name: Analyze
+        run: flutter analyze --no-fatal-infos --no-fatal-warnings
+
+      - name: Test
+        run: flutter test
+
+      - name: Build Android release APK
+        run: flutter build apk --release
+
+      - name: Verify Release INTERNET permission and identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Mobile source SHA: $(git rev-parse HEAD)"
+          grep '^version:' pubspec.yaml
+          apk='build/app/outputs/flutter-apk/app-release.apk'
+          test -f "$apk"
+
+          manifest=$(find build/app/intermediates \
+            \( -path '*merged_manifest*release*AndroidManifest.xml' \
+               -o -path '*merged_manifests*release*AndroidManifest.xml' \) \
+            -print | head -n 1 || true)
+          if [ -z "$manifest" ]; then
+            echo 'Release merged AndroidManifest.xml not found' >&2
+            exit 1
+          fi
+          echo "Merged manifest: $manifest"
+          grep -n 'android.permission.INTERNET' "$manifest"
+
+          sdk_root="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          tool=$(find "$sdk_root/build-tools" -type f -name aapt 2>/dev/null | sort -V | tail -n 1 || true)
+          if [ -z "$tool" ]; then
+            echo 'aapt not found in Android SDK build-tools' >&2
+            exit 1
+          fi
+          echo "Permission tool: $tool"
+          "$tool" dump permissions "$apk" | tee /tmp/apk-permissions.txt
+          grep -q 'android.permission.INTERNET' /tmp/apk-permissions.txt
+          sha256sum "$apk" | tee /tmp/app-release.sha256
+
+      - name: Stage APKs
+        shell: bash
+        run: |
+          set -euo pipefail
+          ver=$(grep '^version:' pubspec.yaml | awk '{print $2}')
+          semver=${ver%%+*}
+          src='build/app/outputs/flutter-apk/app-release.apk'
+          test -f "$src"
+          mkdir -p dist
+          cp "$src" dist/CNKH_POS_Mobile.apk
+          cp "$src" "dist/CNKH_POS_Mobile_v${semver}.apk"
+          echo "RELEASE_TAG=v${semver}-mobile" >> "$GITHUB_ENV"
+          echo "APP_VERSION=${ver}" >> "$GITHUB_ENV"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CNKH_POS_Mobile_release
+          path: dist/*.apk
+          if-no-files-found: error
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/') || (github.ref == 'refs/heads/source/main' && contains(github.event.head_commit.message, '[release]'))
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || env.RELEASE_TAG }}
+          target_commitish: ${{ github.sha }}
+          name: CNKH POS Mobile ${{ env.APP_VERSION }}
+          files: dist/*.apk
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
