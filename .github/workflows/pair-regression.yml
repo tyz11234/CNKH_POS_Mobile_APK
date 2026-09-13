@@ -57,4 +57,4 @@ jobs:
 
       - name: Test real HTTP synchronization and reconnect
         working-directory: CNKH_POS_Desktop/integration
-        run: flutter test
+        run: flutter test test regression

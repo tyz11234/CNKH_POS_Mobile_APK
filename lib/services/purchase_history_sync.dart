@@ -40,6 +40,7 @@ class PurchaseHistorySync {
 
   Future<PurchaseHistoryPullResult> pullFromSavedDesktop({
     bool capabilityKnown = false,
+    bool full = false,
   }) async {
     final base = (await repo.getSetting('lan_sync_host')).trim();
     if (base.isEmpty) {
@@ -76,7 +77,7 @@ class PurchaseHistorySync {
       }
     }
 
-    final since = await repo.getSetting('lan_sync_purchases_cursor');
+    final since = full ? '' : await repo.getSetting('lan_sync_purchases_cursor');
     final uri = Uri.parse(
       '$normalized/api/v1/purchases'
       '${since.isEmpty ? '' : '?since=${Uri.encodeQueryComponent(since)}'}',
@@ -292,4 +293,40 @@ class PurchaseHistorySync {
     }
     return null;
   }
+}
+
+/// Serializes background refresh and explicit reconciliation. A user-requested
+/// full refresh must await a fresh pull and surface errors to its caller.
+class PurchaseHistoryCoordinator {
+  PurchaseHistoryCoordinator({
+    required this.pull,
+    required this.saveError,
+    required this.onChanged,
+  });
+
+  final Future<PurchaseHistoryPullResult> Function({required bool full}) pull;
+  final Future<void> Function(String error) saveError;
+  final void Function() onChanged;
+  final AsyncMutex _mutex = AsyncMutex();
+  DateTime? _lastPull;
+
+  Future<void> synchronize({bool force = false}) => _mutex.run(() async {
+    final now = DateTime.now();
+    final last = _lastPull;
+    if (!force && last != null && now.difference(last) < const Duration(seconds: 5)) {
+      return;
+    }
+    try {
+      final result = await pull(full: force);
+      if (force && !result.supported) {
+        throw StateError('电脑未提供进货历史同步，无法完成全量对账');
+      }
+      await saveError('');
+      _lastPull = now;
+      if (result.changed > 0) onChanged();
+    } catch (e) {
+      await saveError('$e');
+      if (force) rethrow;
+    }
+  });
 }

@@ -176,7 +176,7 @@ class LanSyncClient {
           await _pushSales(
             cfg,
             onlyId: op['entity_id'] as String,
-            originalState: true,
+            originalState: !await _canUploadCancelledSale(d, op),
           );
         } else {
           final res = await http
@@ -214,6 +214,27 @@ class LanSyncClient {
         rethrow;
       }
     }
+  }
+
+  // A cancelled upload has no net inventory effect. It can be sent in its
+  // final state only when no intervening stock operation depends on the sale's
+  // temporary deduction. Keep the void operation queued until its own ACK.
+  Future<bool> _canUploadCancelledSale(
+    DatabaseExecutor db,
+    Map<String, Object?> upload,
+  ) async {
+    final following = await db.query('sync_outbox',
+        where: 'seq>?', whereArgs: [upload['seq']], orderBy: 'seq ASC');
+    for (final op in following) {
+      if (op['kind'] == 'sale_void' && op['entity_id'] == upload['entity_id']) {
+        return true;
+      }
+      if (!const {'customer_upsert', 'supplier_upsert', 'category_upsert',
+          'purchase_attachment'}.contains(op['kind'])) {
+        return false;
+      }
+    }
+    return false;
   }
 
   Map<String, String> _headers(LanSyncConfig cfg) {
