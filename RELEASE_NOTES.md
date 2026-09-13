@@ -1,26 +1,18 @@
-# CNKH POS Mobile 1.9.2+27
+# CNKH POS Mobile 1.10.0+28
 
-发布日期：2026-09-13。配套 Desktop 0.3.5+8，LAN 协议仍为 `cnkh-sync:v1`。
+- 模块化 MyInvois 支持：Desktop 加密配置、Invoice 1.0 JSON、OAuth、提交/查询/取消和提交记录。
+- Mobile 保持离线销售，通过已有 LAN 配对同步 e-Invoice 状态；不直接连接 MyInvois。
+- schema v9 增量升级，保留原收银、商品、库存页面和业务数据。
+- 11 课员工培训，使用实际 Flutter 页面截图及控件箭头。
 
-## 本次修复
+## 使用与范围
 
-- 离线已作废销售没有中间库存依赖时直接同步最终状态，电脑零库存也不会挡住作废和后续无关操作。
-- 保留销售上传/作废的幂等性，以及中间盘点等库存操作的顺序。
-- 手动全量对账等待进货历史同步；网络失败、接口错误或不支持时明确报错，后台同步仍可自动重试。
-- 恢复备份时重建已备份商品图片的本机路径，解决换电脑或 Windows 账号后图片无法显示。
+管理员在 Desktop 设置 → e-Invoice Setup 先配置 Sandbox，补齐公司及买方资料后生成、核对并提交。正式环境凭据独立配置。Submitted 不等于 Validated。
 
-## 下载与安装
+当前支持 MYR 国内普通 Invoice 1.0、整单统一税种/税率/分类；混合税率、汇总和调整票请使用 MyInvois Portal。1.1 数字签章不在本版本范围。结果未知时先核对 UUID，禁止盲目重提。
 
-`CNKH_POS_Mobile.apk` 和 `CNKH_POS_Mobile_v1.9.2.apk` 内容相同，任选其一安装，仅适用于 Android。
+Client ID / Secret 使用 OS 密钥加密；换电脑或 Windows 用户后重新输入。旧 scaffold 的明文凭据升级后清空，需重新填写。
 
-本版本沿用项目现有调试签名配置，未验证与旧版签名相同或可覆盖升级。若提示签名不一致，不要直接卸载旧版，以免丢失本地业务数据；请先保留旧版并妥善导出/迁移数据。
+CI 在上传前执行静态分析、Flutter 回归、真实 UI 截图和 Release 构建。API 测试为模拟响应；未持有店主 MyInvois 凭据，因此未进行真实 Sandbox/Production 提交，也未执行真机、打印机或真实门店网络验收。
 
-附件 `SHA256SUMS.txt` 提供两个 APK 的 SHA-256 校验值。安装后确认账号、业务数据和 LAN 配对状态。
-
-## 验证
-
-- 发布流程在上传附件前执行静态分析、86 项 Flutter 测试、Android Release APK 构建及 INTERNET 权限检查。
-- 双端组合包含 8 项 HTTP 同步及重连回归（包括零库存离线作废与盘点顺序）。
-- 未执行真机覆盖升级、打印机及真实门店局域网验收。
-
-[电脑版 0.3.5](https://github.com/tyz11234/CNKH_POS_Desktop/releases/tag/v0.3.5)
+下载附件后核对 SHA256SUMS.txt。APK 沿用项目现有 debug 签名配置；不同签名的旧版本可能无法覆盖安装。先同步和备份数据，不要直接卸载未同步版本。

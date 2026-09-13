@@ -11,6 +11,7 @@ void main(){
     final database=AppDatabase.forTesting('${dir.path}/pos.db',seed:true);
     try{
       final repo=PosRepository(database:database);
+      await repo.setSetting('lan_sync_host','http://pc');
       const product=Product(id:'offline-ei',sku:'EI',barcode:'9550120001',nameZh:'测试',nameEn:'Test',priceCents:100,stock:3);
       await repo.upsertProduct(product);
       final sale=await repo.createSale(cart:CartState(items:[CartItem(product:product)]),paymentMethod:'CASH',paidCents:100,cashier:'staff');
