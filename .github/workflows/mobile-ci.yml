@@ -41,6 +41,33 @@ jobs:
       - name: Test
         run: flutter test
 
+      - name: Checkout Desktop training source
+        uses: actions/checkout@v4
+        with:
+          repository: tyz11234/CNKH_POS_Desktop
+          ref: feature/myinvois-modular
+          path: .training_desktop
+
+      - name: Capture actual Desktop training screens
+        working-directory: .training_desktop
+        run: |
+          flutter pub get
+          flutter test tool/training_capture_test.dart
+
+      - name: Capture actual Mobile training screens
+        run: |
+          flutter test tool/training_capture_test.dart
+          for name in pair backup einvoice_setup einvoice_history; do
+            cp .training_desktop/assets/training/$name.png assets/training/
+            cp .training_desktop/assets/training/$name.json assets/training/
+          done
+
+      - name: Upload training screenshots
+        uses: actions/upload-artifact@v4
+        with:
+          name: mobile-training-screenshots
+          path: assets/training/
+
       - name: Build Android release APK
         run: flutter build apk --release
 
