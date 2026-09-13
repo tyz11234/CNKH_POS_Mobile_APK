@@ -4,50 +4,35 @@
 
 基于 **Flutter / Dart**，使用本地 SQLite 保存业务数据。核心收银与店内同步不依赖云服务器。
 
-> `main` 现已包含完整 Flutter 源码与使用说明，并合入手机版小票库存关联及单号重复修复。`source/main` 保留为兼容源码分支。
-
-`main` 的提交和 Pull Request 会运行 Mobile CI（分析、测试、Release APK 构建）及 Desktop 联调。已有正式 Release 不随源码合并自动更新。
-
-本次合入的源码已通过 67 项 Mobile 测试、6 项双端联调和 Release APK 构建。详细开发说明见 [`source/main` README](https://github.com/tyz11234/CNKH_POS_Mobile_APK/blob/source/main/README.md)。
+> README 最后更新：**2026-09-13**。`main` 是完整源码与发布分支；`source/main` 仅保留为兼容分支。
 
 ## 当前正式版本
 
 | 项目 | 当前版本 |
 | --- | --- |
-| Mobile | **1.9.0+25** |
-| 正式 Release | **`v1.9.0-mobile`** |
-| 配套 Desktop | **v0.3.3 / 0.3.3+6** |
+| Mobile | **1.9.1+26 / `v1.9.1-mobile`** |
+| 配套 Desktop | **0.3.4+7 / `v0.3.4`** |
 | LAN 协议 | `cnkh-sync:v1` |
-| OCR | **本机 Latin + Chinese ML Kit** |
-| OCR 云服务 | **不使用** |
+| OCR | 本机 Latin + Chinese ML Kit，不使用云 OCR |
 
-推荐配套：**Desktop v0.3.3 + Mobile v1.9.0**。
+### 下载
 
-### 正式下载
+- [Android APK](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/download/v1.9.1-mobile/CNKH_POS_Mobile.apk)
+- [版本化 APK（内容相同）](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/download/v1.9.1-mobile/CNKH_POS_Mobile_v1.9.1.apk)
+- [Release 与 SHA-256 校验文件](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/tag/v1.9.1-mobile)
+- [配套电脑版](https://github.com/tyz11234/CNKH_POS_Desktop/releases/tag/v0.3.4)
 
-Mobile v1.9.0 Release：
-https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/tag/v1.9.0-mobile
+发布源码由 `v1.9.1-mobile` 标签定位；附件 `SHA256SUMS.txt` 给出本次 APK 校验值。
 
-直接下载 APK：
-https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/download/v1.9.0-mobile/CNKH_POS_Mobile.apk
+## 2026-09-13 修复发布
 
-版本化 APK：
-https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/download/v1.9.0-mobile/CNKH_POS_Mobile_v1.9.0.apk
+- 修复单号并发重复、销售同步去重及小票改号后的库存流水关联。
+- 修复同一商品多行进货撤销的数量计算，并加强流水缺失、数量不符和系统时间回拨时的撤销保护。
+- 修复商品搜索对只读数据库结果排序导致的异常。
+- 商品编辑按原始快照合并字段，保留期间更新的库存和成本；库存冲突时拒绝覆盖。
+- 商品库存编辑记录流水，手机同步到电脑也保留流水，阻止不安全的旧进货撤销。
 
-配套 Desktop v0.3.3：
-https://github.com/tyz11234/CNKH_POS_Desktop/releases/tag/v0.3.3
-
-APK SHA-256：
-
-```text
-1b892b8fd8f6760cf11fdbf1f1edeef1956229237dcccb320eb26f0307f09d5c
-```
-
-本次 Mobile Release 对应源码提交：
-
-```text
-46a5bc941eb05a58b16361518a0af9429d258174
-```
+完整说明见 [RELEASE_NOTES.md](RELEASE_NOTES.md)。
 
 ## 主要功能
 
@@ -89,7 +74,7 @@ SQLite 原子入库
     ↓
 Persistent Outbox
     ↓
-Desktop v0.3.3
+Desktop v0.3.4
 ```
 
 ### OCR 入口
@@ -250,7 +235,7 @@ APK 因内置中文 OCR 模型，体积会比 v1.8.x 明显增大。
 
 ## 连接电脑端
 
-1. 安装并启动 **Desktop v0.3.3**。
+1. 安装并启动 **Desktop v0.3.4**。
 2. 手机和电脑连接同一 Wi-Fi / LAN。
 3. Desktop 打开 LAN / 扫码配对页面。
 4. Mobile 扫描电脑二维码。
@@ -291,39 +276,24 @@ PIN 连续输错 5 次会锁定 5 分钟。Mobile 与 Desktop 账号凭据分别
 
 ## 安装说明
 
-1. 推荐先安装/更新 Desktop v0.3.3。
+1. 推荐先安装/更新 Desktop v0.3.4。
 2. Android 下载 `CNKH_POS_Mobile.apk`。
 3. 按 Android 提示允许当前下载或文件管理 App 安装 APK。
 4. 安装后登录并重新确认 LAN 配对状态。
 
 APK 只能安装在 Android，不能直接安装到 iPhone。
 
-若覆盖安装提示签名不一致，请先备份/保留业务数据，不要直接卸载正在使用的版本。
+本版本沿用项目现有调试签名配置，未验证与旧版签名相同或可覆盖升级。若提示签名不一致，不要直接卸载旧版，以免丢失本地业务数据；请先保留旧版并妥善导出/迁移数据。
 
-## 已完成验证
+## 验证
 
-Mobile v1.9.0 正式 CI：
-https://github.com/tyz11234/CNKH_POS_Mobile_APK/actions/runs/34023967305
+本轮源码基线已通过：
 
-已通过：
+- Mobile 静态分析、**78 项 Flutter 测试**、Release APK 构建与 INTERNET 权限检查。
+- Desktop 静态分析、**86 项 Flutter 测试**与 Windows Release 构建。
+- **6 项双端 HTTP 同步与断线重连测试**。
 
-- `flutter pub get`
-- `flutter analyze`
-- **32 项 Flutter tests**
-- Android Release APK
-- R8 release shrink
-- Chinese + Latin ML Kit bundled models
-- APK artifact 上传
-- GitHub Release 创建
-
-配套 Desktop v0.3.3：
-
-- Desktop analyze：通过
-- Desktop tests：通过
-- Windows Release build：通过
-- OCR Purchase mutation：通过
-- `purchase_reverse` 幂等：通过
-- 原有 Desktop / Mobile HTTP 与断线重连回归：通过
+[Mobile 发布流程](https://github.com/tyz11234/CNKH_POS_Mobile_APK/actions/workflows/mobile-ci.yml) 会重新执行分析、测试和构建，通过后上传附件。未执行真机覆盖升级、打印机及真实门店局域网验收。
 
 ## 当前不包含
 
@@ -354,7 +324,7 @@ flutter build apk --release
 
 ## 相关入口
 
-- Mobile v1.9.0：https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/tag/v1.9.0-mobile
-- Mobile 源码：https://github.com/tyz11234/CNKH_POS_Mobile_APK/tree/source/main
-- Desktop v0.3.3：https://github.com/tyz11234/CNKH_POS_Desktop/releases/tag/v0.3.3
+- Mobile v1.9.1：https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/tag/v1.9.1-mobile
+- Mobile 源码：https://github.com/tyz11234/CNKH_POS_Mobile_APK/tree/main
+- Desktop v0.3.4：https://github.com/tyz11234/CNKH_POS_Desktop/releases/tag/v0.3.4
 - OCR Mobile PR #6：https://github.com/tyz11234/CNKH_POS_Mobile_APK/pull/6

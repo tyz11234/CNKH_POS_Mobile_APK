@@ -88,22 +88,24 @@ jobs:
           cp "$src" "dist/CNKH_POS_Mobile_v${semver}.apk"
           echo "RELEASE_TAG=v${semver}-mobile" >> "$GITHUB_ENV"
           echo "APP_VERSION=${ver}" >> "$GITHUB_ENV"
+          (cd dist && sha256sum *.apk > SHA256SUMS.txt)
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: CNKH_POS_Mobile_release
-          path: dist/*.apk
+          path: dist/*
           if-no-files-found: error
 
       - name: Create GitHub Release
-        if: startsWith(github.ref, 'refs/tags/') || (github.ref == 'refs/heads/source/main' && contains(github.event.head_commit.message, '[release]'))
+        if: startsWith(github.ref, 'refs/tags/') || (github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[release]'))
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || env.RELEASE_TAG }}
           target_commitish: ${{ github.sha }}
           name: CNKH POS Mobile ${{ env.APP_VERSION }}
-          files: dist/*.apk
+          body_path: RELEASE_NOTES.md
+          files: dist/*
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
