@@ -163,6 +163,13 @@ void main() {
       expect((await repo.getProduct('local-p1'))!.stock, 10);
       expect(await db.query('stock_moves'), isEmpty);
 
+      // Explicit reconciliation must ignore the saved incremental cursor.
+      final full = await sync.pullFromSavedDesktop(full: true);
+      expect(full.changed, 1);
+      expect(await db.query('purchases'), hasLength(1));
+      expect((await repo.getProduct('local-p1'))!.stock, 10);
+      expect(await db.query('stock_moves'), isEmpty);
+
       // Desktop later reverses the purchase. Mobile mirrors the status only;
       // Desktop/catalog stock remains authoritative and is not subtracted again.
       reversed = 1;

@@ -10,19 +10,28 @@
 
 | 项目 | 当前版本 |
 | --- | --- |
-| Mobile | **1.9.1+26 / `v1.9.1-mobile`** |
-| 配套 Desktop | **0.3.4+7 / `v0.3.4`** |
+| Mobile | **1.9.2+27 / `v1.9.2-mobile`** |
+| 配套 Desktop | **0.3.5+8 / `v0.3.5`** |
 | LAN 协议 | `cnkh-sync:v1` |
 | OCR | 本机 Latin + Chinese ML Kit，不使用云 OCR |
 
 ### 下载
 
-- [Android APK](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/download/v1.9.1-mobile/CNKH_POS_Mobile.apk)
-- [版本化 APK（内容相同）](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/download/v1.9.1-mobile/CNKH_POS_Mobile_v1.9.1.apk)
-- [Release 与 SHA-256 校验文件](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/tag/v1.9.1-mobile)
-- [配套电脑版](https://github.com/tyz11234/CNKH_POS_Desktop/releases/tag/v0.3.4)
+- [Android APK](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/download/v1.9.2-mobile/CNKH_POS_Mobile.apk)
+- [版本化 APK（内容相同）](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/download/v1.9.2-mobile/CNKH_POS_Mobile_v1.9.2.apk)
+- [Release 与 SHA-256 校验文件](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/tag/v1.9.2-mobile)
+- [配套电脑版](https://github.com/tyz11234/CNKH_POS_Desktop/releases/tag/v0.3.5)
 
-发布源码由 `v1.9.1-mobile` 标签定位；附件 `SHA256SUMS.txt` 给出本次 APK 校验值。
+发布源码由 `v1.9.2-mobile` 标签定位；附件 `SHA256SUMS.txt` 给出本次 APK 校验值。
+
+## 2026-09-13 同步与恢复修复
+
+- 手机离线开单后作废，且没有中间库存操作时，直接同步作废状态，避免电脑零库存阻塞整条队列；客户等无库存影响的编辑不阻止合并。
+- 已经入库的销售遇到确认响应丢失，重试作废只回补一次；存在中间盘点等库存依赖时，仍按原操作顺序同步。
+- 手机手动全量对账会等待进货历史同步并执行全量拉取；失败或电脑不支持时显示错误，不再提示全部完成。
+- 电脑版恢复备份时，会把已备份的商品图片引用改为当前电脑路径，兼容旧 Windows 用户目录。
+
+本轮新增 13 项本端回归测试和 2 项真实 HTTP 联调用例；发布流程执行本端完整测试、静态分析和构建。两端组合联调为 8 项。未执行真机升级、打印机和真实门店局域网验收。
 
 ## 2026-09-13 修复发布
 
@@ -74,7 +83,7 @@ SQLite 原子入库
     ↓
 Persistent Outbox
     ↓
-Desktop v0.3.4
+Desktop v0.3.5
 ```
 
 ### OCR 入口
@@ -235,7 +244,7 @@ APK 因内置中文 OCR 模型，体积会比 v1.8.x 明显增大。
 
 ## 连接电脑端
 
-1. 安装并启动 **Desktop v0.3.4**。
+1. 安装并启动 **Desktop v0.3.5**。
 2. 手机和电脑连接同一 Wi-Fi / LAN。
 3. Desktop 打开 LAN / 扫码配对页面。
 4. Mobile 扫描电脑二维码。
@@ -276,7 +285,7 @@ PIN 连续输错 5 次会锁定 5 分钟。Mobile 与 Desktop 账号凭据分别
 
 ## 安装说明
 
-1. 推荐先安装/更新 Desktop v0.3.4。
+1. 推荐先安装/更新 Desktop v0.3.5。
 2. Android 下载 `CNKH_POS_Mobile.apk`。
 3. 按 Android 提示允许当前下载或文件管理 App 安装 APK。
 4. 安装后登录并重新确认 LAN 配对状态。
@@ -289,9 +298,9 @@ APK 只能安装在 Android，不能直接安装到 iPhone。
 
 本轮源码基线已通过：
 
-- Mobile 静态分析、**78 项 Flutter 测试**、Release APK 构建与 INTERNET 权限检查。
-- Desktop 静态分析、**86 项 Flutter 测试**与 Windows Release 构建。
-- **6 项双端 HTTP 同步与断线重连测试**。
+- Mobile 静态分析、**86 项 Flutter 测试**、Release APK 构建与 INTERNET 权限检查。
+- Desktop 静态分析、**91 项 Flutter 测试**与 Windows Release 构建。
+- **8 项双端 HTTP 同步与断线重连测试**。
 
 [Mobile 发布流程](https://github.com/tyz11234/CNKH_POS_Mobile_APK/actions/workflows/mobile-ci.yml) 会重新执行分析、测试和构建，通过后上传附件。未执行真机覆盖升级、打印机及真实门店局域网验收。
 
@@ -324,7 +333,7 @@ flutter build apk --release
 
 ## 相关入口
 
-- Mobile v1.9.1：https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/tag/v1.9.1-mobile
+- Mobile v1.9.2：https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/tag/v1.9.2-mobile
 - Mobile 源码：https://github.com/tyz11234/CNKH_POS_Mobile_APK/tree/main
-- Desktop v0.3.4：https://github.com/tyz11234/CNKH_POS_Desktop/releases/tag/v0.3.4
+- Desktop v0.3.5：https://github.com/tyz11234/CNKH_POS_Desktop/releases/tag/v0.3.5
 - OCR Mobile PR #6：https://github.com/tyz11234/CNKH_POS_Mobile_APK/pull/6

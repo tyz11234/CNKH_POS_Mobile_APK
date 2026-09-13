@@ -103,8 +103,12 @@ class _HomeShellState extends State<HomeShell> {
   int _pending = 0;
   int _overdueHolds = 0;
   Timer? _holdPoll;
-  bool _purchaseHistorySyncing = false;
-  DateTime? _lastPurchaseHistorySync;
+  late final _purchaseHistory = PurchaseHistoryCoordinator(
+    pull: ({required bool full}) =>
+        PurchaseHistorySync(widget.repo).pullFromSavedDesktop(full: full),
+    saveError: (error) => widget.repo.setSetting('lan_sync_last_purchase_error', error),
+    onChanged: _bumpData,
+  );
 
   @override
   void initState() {
@@ -225,7 +229,7 @@ class _HomeShellState extends State<HomeShell> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('对账失败 / Reconcile failed: ${_syncClient.lastError ?? e}'),
+          content: Text('对账失败 / Reconcile failed: $e'),
           backgroundColor: CnkhColors.danger,
         ),
       );
@@ -245,29 +249,8 @@ class _HomeShellState extends State<HomeShell> {
     unawaited(_syncPurchaseHistory());
   }
 
-  Future<void> _syncPurchaseHistory({bool force = false}) async {
-    if (_purchaseHistorySyncing) return;
-    final now = DateTime.now();
-    final last = _lastPurchaseHistorySync;
-    if (!force && last != null && now.difference(last) < const Duration(seconds: 5)) {
-      return;
-    }
-    _purchaseHistorySyncing = true;
-    try {
-      final result = await PurchaseHistorySync(widget.repo).pullFromSavedDesktop();
-      _lastPurchaseHistorySync = now;
-      await widget.repo.setSetting('lan_sync_last_purchase_error', '');
-      if (result.supported && result.changed > 0 && mounted) {
-        setState(() => _dataEpoch++);
-      }
-    } catch (e) {
-      // Do not mark the main Sale/Catalog link offline for an optional capability,
-      // but persist the error so Purchase admin/reconcile can surface it.
-      await widget.repo.setSetting('lan_sync_last_purchase_error', '$e');
-    } finally {
-      _purchaseHistorySyncing = false;
-    }
-  }
+  Future<void> _syncPurchaseHistory({bool force = false}) =>
+      _purchaseHistory.synchronize(force: force);
 
   void _bumpData() {
     if (!mounted) return;
