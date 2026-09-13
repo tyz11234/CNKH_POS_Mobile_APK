@@ -148,7 +148,7 @@ CREATE TABLE sync_outbox (
     final app = AppDatabase.forTesting(path, seed: false);
     final db = await app.db;
 
-    expect(await db.getVersion(), 8);
+    expect(await db.getVersion(), 9);
     expect(Sqflite.firstIntValue(await db.rawQuery('SELECT COUNT(*) FROM products')), 1);
     expect(Sqflite.firstIntValue(await db.rawQuery('SELECT COUNT(*) FROM sales')), 1);
     expect(Sqflite.firstIntValue(await db.rawQuery('SELECT COUNT(*) FROM customers')), 1);
