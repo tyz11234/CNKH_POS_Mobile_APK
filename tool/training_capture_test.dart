@@ -42,34 +42,42 @@ void main() {
     tester.view.physicalSize=const Size(430,932);tester.view.devicePixelRatio=1;
     addTearDown(tester.view.resetPhysicalSize);addTearDown(tester.view.resetDevicePixelRatio);
     // Use the bundled production CJK font, never Flutter test's Ahem squares.
-    final font=FontLoader('Roboto')..addFont(File('.training_desktop/assets/fonts/NotoSansSC-Regular.ttf').readAsBytes().then((b)=>ByteData.sublistView(b)));await font.load();
-    final output=Directory('assets/training');await output.create(recursive:true);
+    final output=Directory('assets/training');
+    await tester.runAsync(() async {
+      final font=FontLoader('Roboto')..addFont(File('.training_desktop/assets/fonts/NotoSansSC-Regular.ttf').readAsBytes().then((b)=>ByteData.sublistView(b)));await font.load();
+      await output.create(recursive:true);
+    });
+    expect(tester.takeException(), isNull);
     final key=GlobalKey();
     Future<void> settle()async{
       for(var i=0;i<5;i++){await tester.runAsync(()=>Future<void>.delayed(const Duration(milliseconds:200)));await tester.pump(const Duration(milliseconds:200));}
       expect(tester.takeException(),isNull);
     }
     Future<void> capture(String name, Widget screen, Finder target, {bool history=false, bool scroll=false})async{
+      debugPrint('Training capture: $name');
       await tester.pumpWidget(RepaintBoundary(key:key,child:MaterialApp(theme:buildCnkhTheme(),home:Scaffold(body:screen))));await settle();
       if(history){await tester.tap(find.text('Submission History'));await tester.pump(const Duration(milliseconds:500));await settle();}
       expect(target,findsWidgets);
       if(scroll){await tester.ensureVisible(target.first);await settle();}
       final boundary=key.currentContext!.findRenderObject()! as RenderRepaintBoundary;
-      final image=await boundary.toImage(pixelRatio:1);
-      final bytes=await image.toByteData(format:ui.ImageByteFormat.png);
       final point=tester.getCenter(target.first);
       final bounds=boundary.size;
       expect(point.dx,inInclusiveRange(0,bounds.width));expect(point.dy,inInclusiveRange(0,bounds.height));
       await tester.runAsync(()async{
+        final image=await boundary.toImage(pixelRatio:1);
+        final bytes=await image.toByteData(format:ui.ImageByteFormat.png);
         await File('${output.path}/$name.png').writeAsBytes(bytes!.buffer.asUint8List());
         await File('${output.path}/$name.json').writeAsString(jsonEncode({'width':bounds.width,'height':bounds.height,'x':point.dx/bounds.width,'y':point.dy/bounds.height,'source':'actual Flutter widget screenshot','screen':screen.runtimeType.toString()}));
-      });image.dispose();
+        image.dispose();
+      });
+      expect(tester.takeException(), isNull);
+      debugPrint('Training captured: $name');
       await tester.pumpWidget(const SizedBox.shrink());await settle();
     }
     await capture('login',LoginScreen(repo:repo,onLoggedIn:(_){}),find.byType(TextField));
     await capture('sale',CartScreen(cart:CartState(items:[CartItem(product:product)]),user:user,repo:repo,onChanged:(){},onCheckout:(){},onHold:()async{},onResume:()async{}),find.byType(TextField));
     await capture('payment',CheckoutScreen(cart:CartState(items:[CartItem(product:product)]),user:user,repo:repo,qrStorage:QrStorage(),onPaid:(_){},onCancel:(){}),find.byType(TextField));
-    await capture('refund',SalesListScreen(repo:repo,todayOnly:true,canVoid:true),find.byType(TextField));
+    await capture('refund',SalesListScreen(repo:repo,todayOnly:true,canVoid:true),find.text('作废'));
     await capture('stock',StocktakePage(repo:repo,user:user),find.byIcon(Icons.edit));
     await capture('einvoice_status',EInvoiceStatusScreen(repo:repo),find.byType(DropdownButtonFormField<String>));
     await capture('sync',SettingsScreen(repo:repo,user:user,qrStorage:QrStorage()),find.text('局域网同步 / LAN Sync'),scroll:true);
