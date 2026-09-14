@@ -2,3 +2,4 @@ build/
 .dart_tool/
 *.iml
 .idea/
+.training_desktop/

@@ -1,3 +1,4 @@
+import 'einvoice/einvoice_status_store.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
@@ -152,9 +153,35 @@ class LanSyncClient {
     final a = await _pullCatalog(cfg);
     final b = await _pullSales(cfg);
     await pushBarcodeQueue(cfg);
+    if ((h['capabilities'] as List? ?? []).contains('einvoice_status_v1')) {
+      try {
+        await _pullEInvoiceStatuses(cfg);
+        await repo.setSetting('einvoice_status_sync_error', '');
+      } catch (_) {
+        await repo.setSetting('einvoice_status_sync_error', 'e-Invoice 状态同步失败，保留上次结果；销售同步已完成。');
+      }
+    }
     await repo.setSetting('lan_sync_last_error', '');
     return '$a\n$b';
   });
+
+  Future<void> _pullEInvoiceStatuses(LanSyncConfig cfg) async {
+    final rows = <Map<String, dynamic>>[];
+    var after = '';
+    while (true) {
+      final uri = Uri.parse('${cfg.normalizedBase}/api/v1/einvoices').replace(queryParameters: {'after': after});
+      final response = await http.get(uri, headers: _headers(cfg)).timeout(const Duration(seconds: 20));
+      if (response.statusCode != 200) throw StateError('Status sync failed');
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+      final items = data['items'] as List;
+      rows.addAll(items.map((r) => Map<String, dynamic>.from(r as Map)));
+      if (data['has_more'] != true) break;
+      final next = data['next'] as String;
+      if (next.compareTo(after) <= 0 || rows.length > 100000) throw const FormatException('Invalid status pagination');
+      after = next;
+    }
+    await EInvoiceStatusStore(await _db.db).replaceSnapshot(cfg.normalizedBase, rows);
+  }
 
   Future<void> _drainPending(LanSyncConfig cfg) async {
     final d = await _db.db;

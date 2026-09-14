@@ -1,3 +1,4 @@
+import 'einvoice_status_screen.dart';
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
@@ -327,6 +328,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ),
         const SizedBox(height: 16),
         ReceiptTemplateEditor(repo: widget.repo, canEdit: canEdit),
+        Card(child: ListTile(leading: const Icon(Icons.receipt_long_outlined), title: const Text('e-Invoice 状态'), trailing: const Icon(Icons.chevron_right), onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => EInvoiceStatusScreen(repo: widget.repo))))),
         const SizedBox(height: 12),
         Card(
           child: Padding(
@@ -512,7 +514,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     );
                   },
                   icon: const Icon(Icons.school_outlined),
-                  label: const Text('培训 / Training（配对→扫码→发收据）'),
+                  label: const Text('员工培训 / Employee Training（11 课）'),
                 ),
               ],
             ),
