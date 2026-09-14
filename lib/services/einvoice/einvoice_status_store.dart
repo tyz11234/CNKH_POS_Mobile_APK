@@ -21,6 +21,7 @@ class EInvoiceStatusStore {
   Future<List<Map<String, Object?>>> history(String host, String environment) => db.rawQuery('''
     SELECT s.receipt_no, s.voided, s.total_cents, COALESCE(e.status,'pending') AS status, e.updated_at
     FROM sales s LEFT JOIN e_invoice_status e ON e.host=? AND e.environment=?
-      AND (e.client_sale_id=s.id OR ('pc-' || e.sale_id)=s.id OR e.sale_id=s.id)
+      AND (e.client_sale_id=s.id OR ('pc-' || e.sale_id)=s.id OR e.sale_id=s.id
+        OR (e.receipt_no=s.receipt_no AND COALESCE(s.synced_at,'')<>''))
     ORDER BY s.sold_at DESC LIMIT 500''', [host, environment]);
 }
