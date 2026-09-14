@@ -45,7 +45,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: tyz11234/CNKH_POS_Desktop
-          ref: feature/myinvois-modular
+          ref: 47c665de6483f79b5f9ffb3c4c4e3053e82cf364 # Desktop v0.4.0 release source
           path: .training_desktop
 
       - name: Capture actual Desktop training screens
@@ -61,10 +61,6 @@ jobs:
             cp .training_desktop/assets/training/$name.png assets/training/
             cp .training_desktop/assets/training/$name.json assets/training/
           done
-
-      - name: Record Mobile status training preview
-        if: github.event_name == 'pull_request'
-        run: python3 -c "import base64; from pathlib import Path; s=base64.b64encode(Path('assets/training/einvoice_status.png').read_bytes()).decode(); print('\\n'.join('CNKH_PREVIEW:'+s[i:i+6000] for i in range(0,len(s),6000)))"
 
       - name: Upload training screenshots
         uses: actions/upload-artifact@v4

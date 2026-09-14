@@ -16,3 +16,5 @@ Client ID / Secret 使用 OS 密钥加密；换电脑或 Windows 用户后重新
 CI 在上传前执行静态分析、Flutter 回归、真实 UI 截图和 Release 构建。API 测试为模拟响应；未持有店主 MyInvois 凭据，因此未进行真实 Sandbox/Production 提交，也未执行真机、打印机或真实门店网络验收。
 
 下载附件后核对 SHA256SUMS.txt。APK 沿用项目现有 debug 签名配置；不同签名的旧版本可能无法覆盖安装。先同步和备份数据，不要直接卸载未同步版本。
+
+完整修改文件、数据库迁移与验证记录见 [EINVOICE_REPORT.md](https://github.com/tyz11234/CNKH_POS_Mobile_APK/blob/v1.10.0-mobile/EINVOICE_REPORT.md)。

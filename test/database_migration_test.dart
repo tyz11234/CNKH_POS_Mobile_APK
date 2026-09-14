@@ -8,7 +8,7 @@ import 'package:cnkh_pos_mobile/db/app_database.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  test('v7 database upgrades to v8 OCR schema without losing business data',
+  test('v7 database upgrades through OCR to v9 without losing business data',
       () async {
     AppDatabase.ensureFfi();
     final dir = await Directory.systemTemp.createTemp('cnkh_migration_test_');
@@ -149,6 +149,7 @@ CREATE TABLE sync_outbox (
     final db = await app.db;
 
     expect(await db.getVersion(), 9);
+    expect(await db.query('e_invoice_status'), isEmpty);
     expect(Sqflite.firstIntValue(await db.rawQuery('SELECT COUNT(*) FROM products')), 1);
     expect(Sqflite.firstIntValue(await db.rawQuery('SELECT COUNT(*) FROM sales')), 1);
     expect(Sqflite.firstIntValue(await db.rawQuery('SELECT COUNT(*) FROM customers')), 1);

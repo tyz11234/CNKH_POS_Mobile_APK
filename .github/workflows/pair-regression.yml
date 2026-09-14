@@ -25,11 +25,11 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           path: CNKH_POS_Mobile_APK
 
-      - name: Checkout current Desktop companion
+      - name: Checkout release-paired Desktop companion
         uses: actions/checkout@v4
         with:
           repository: tyz11234/CNKH_POS_Desktop
-          ref: feature/myinvois-modular
+          ref: 47c665de6483f79b5f9ffb3c4c4e3053e82cf364
           path: CNKH_POS_Desktop
 
       - name: Record exact paired source SHAs
@@ -38,7 +38,7 @@ jobs:
           set -euo pipefail
           echo "Mobile ref: ${{ github.event.pull_request.head.ref || github.ref_name }}"
           echo "Mobile SHA: $(git -C CNKH_POS_Mobile_APK rev-parse HEAD)"
-          echo "Desktop ref: feature/myinvois-modular"
+          echo "Desktop ref: 47c665de6483f79b5f9ffb3c4c4e3053e82cf364"
           echo "Desktop SHA: $(git -C CNKH_POS_Desktop rev-parse HEAD)"
 
       - name: Setup Flutter
