@@ -34,6 +34,11 @@ class TrainingPage extends StatelessWidget {
             const Text('向下滚动填写凭据，保存后测试连接：'),
             const TrainingScreenshot(name: 'einvoice_credentials'),
           ],
+          if (lessons[i].$2 == 'einvoice_history') ...[
+            const SizedBox(height: 12),
+            const Text('手机同步后，在设置 → e-Invoice 状态查看结果：'),
+            const TrainingScreenshot(name: 'einvoice_status'),
+          ],
         ],
       )),
     ]),

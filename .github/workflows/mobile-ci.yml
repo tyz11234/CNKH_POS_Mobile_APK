@@ -62,6 +62,10 @@ jobs:
             cp .training_desktop/assets/training/$name.json assets/training/
           done
 
+      - name: Record Mobile status training preview
+        if: github.event_name == 'pull_request'
+        run: python3 -c "import base64; from pathlib import Path; s=base64.b64encode(Path('assets/training/einvoice_status.png').read_bytes()).decode(); print('\\n'.join('CNKH_PREVIEW:'+s[i:i+6000] for i in range(0,len(s),6000)))"
+
       - name: Upload training screenshots
         uses: actions/upload-artifact@v4
         with:
@@ -73,6 +77,9 @@ jobs:
 
       - name: Build Android release APK
         run: flutter build apk --release
+
+      - name: Verify training assets in APK
+        run: python3 tool/verify_training_bundle.py build/app/outputs/flutter-apk/app-release.apk --kind mobile
 
       - name: Verify Release INTERNET permission and identity
         shell: bash
@@ -119,6 +126,7 @@ jobs:
           echo "RELEASE_TAG=v${semver}-mobile" >> "$GITHUB_ENV"
           echo "APP_VERSION=${ver}" >> "$GITHUB_ENV"
           (cd dist && sha256sum *.apk > SHA256SUMS.txt)
+          cat dist/SHA256SUMS.txt
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
