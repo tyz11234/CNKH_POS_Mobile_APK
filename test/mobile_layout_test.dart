@@ -296,6 +296,52 @@ void main() {
     },
   );
 
+  for (final count in [0, 1]) {
+    testWidgets(
+      'POS with $count cart items still collapses and expands on a tall phone',
+      (tester) async {
+        await tester.runAsync(() => repo.upsertProduct(product(0)));
+        await show(
+          tester,
+          Scaffold(
+            body: CartScreen(
+              cart: CartState(
+                items: List.generate(
+                  count,
+                  (_) => CartItem(product: product(0)),
+                ),
+              ),
+              user: user,
+              repo: repo,
+              onChanged: () {},
+              onCheckout: () {},
+              onHold: () async {},
+              onResume: () async {},
+            ),
+          ),
+        );
+        final shelf = find.byKey(const PageStorageKey('pos-products'));
+        final before = tester.getSize(shelf).height;
+        await tester.drag(
+          find.byKey(const PageStorageKey('pos-scroll')),
+          const Offset(0, -700),
+        );
+        await tester.pumpAndSettle();
+        expect(tester.getSize(shelf).height, lessThan(before));
+        expect(find.text('购物车 ($count)').hitTestable(), findsOneWidget);
+        expect(find.text('结账\nCheckout').hitTestable(), findsOneWidget);
+        await tester.drag(
+          find.byKey(const PageStorageKey('pos-scroll')),
+          const Offset(0, 700),
+        );
+        await tester.pumpAndSettle();
+        expect(tester.getSize(shelf).height, closeTo(before, 1));
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox.shrink());
+      },
+    );
+  }
+
   testWidgets(
     'empty POS scrolls on a small screen with large text and keyboard',
     (tester) async {

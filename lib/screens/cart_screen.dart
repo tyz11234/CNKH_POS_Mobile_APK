@@ -448,136 +448,170 @@ class _CartScreenState extends State<CartScreen> {
                   ),
                 ),
               ),
-              SliverPersistentHeader(
-                pinned: true,
-                delegate: _ProductShelf(
-                  expandedHeight:
-                      (_imagesOn ? 160.0 : 124.0) + extra + pagerHeight,
-                  compactHeight: 84.0 + extra + pagerHeight,
-                  builder: (context, compact) => Material(
-                    color: Theme.of(context).scaffoldBackgroundColor,
-                    child: Column(
-                      children: [
-                        Expanded(
-                          child: _loading
-                              ? const Center(child: CircularProgressIndicator())
-                              : _productError != null
-                              ? ListLoadMessage(
-                                  message: _productError!,
-                                  onRetry: () => _reload(_search.text),
-                                )
-                              : _results.isEmpty
-                              ? const ListLoadMessage(
-                                  message: '没有匹配的商品 / No matching products',
-                                )
-                              : ListView.separated(
-                                  key: const PageStorageKey('pos-products'),
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 16,
-                                  ),
-                                  scrollDirection: Axis.horizontal,
-                                  itemCount: _results.length,
-                                  separatorBuilder: (_, __) =>
-                                      const SizedBox(width: 8),
-                                  itemBuilder: (context, i) => _ProductChip(
-                                    product: _results[i],
-                                    showImage: _imagesOn,
-                                    compact: compact,
-                                    onTap: () {
-                                      _add(_results[i]);
-                                    },
-                                  ),
-                                ),
-                        ),
-                        SizedBox(
-                          height: pagerHeight,
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
+              SliverLayoutBuilder(
+                builder: (context, shelfConstraints) => SliverMainAxisGroup(
+                  slivers: [
+                    SliverPersistentHeader(
+                      pinned: true,
+                      delegate: _ProductShelf(
+                        expandedHeight:
+                            (_imagesOn ? 160.0 : 124.0) + extra + pagerHeight,
+                        compactHeight: 84.0 + extra + pagerHeight,
+                        builder: (context, compact) => Material(
+                          color: Theme.of(context).scaffoldBackgroundColor,
+                          child: Column(
                             children: [
-                              TextButton(
-                                onPressed: _loading || _productPage == 0
-                                    ? null
-                                    : () => _changeProductPage(-1),
-                                child: const Text('上一页'),
-                              ),
                               Expanded(
-                                child: Center(
-                                  heightFactor: 1,
-                                  child: FittedBox(
-                                    fit: BoxFit.scaleDown,
-                                    child: Text('第 ${_productPage + 1} 页'),
-                                  ),
-                                ),
+                                child: _loading
+                                    ? const Center(
+                                        child: CircularProgressIndicator(),
+                                      )
+                                    : _productError != null
+                                    ? ListLoadMessage(
+                                        message: _productError!,
+                                        onRetry: () => _reload(_search.text),
+                                      )
+                                    : _results.isEmpty
+                                    ? const ListLoadMessage(
+                                        message:
+                                            '没有匹配的商品 / No matching products',
+                                      )
+                                    : ListView.separated(
+                                        key: const PageStorageKey(
+                                          'pos-products',
+                                        ),
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 16,
+                                        ),
+                                        scrollDirection: Axis.horizontal,
+                                        itemCount: _results.length,
+                                        separatorBuilder: (_, __) =>
+                                            const SizedBox(width: 8),
+                                        itemBuilder: (context, i) =>
+                                            _ProductChip(
+                                              product: _results[i],
+                                              showImage: _imagesOn,
+                                              compact: compact,
+                                              onTap: () {
+                                                _add(_results[i]);
+                                              },
+                                            ),
+                                      ),
                               ),
-                              TextButton(
-                                onPressed: _loading || !_productHasNext
-                                    ? null
-                                    : () => _changeProductPage(1),
-                                child: const Text('下一页'),
+                              SizedBox(
+                                height: pagerHeight,
+                                child: Row(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    TextButton(
+                                      onPressed: _loading || _productPage == 0
+                                          ? null
+                                          : () => _changeProductPage(-1),
+                                      child: const Text('上一页'),
+                                    ),
+                                    Expanded(
+                                      child: Center(
+                                        heightFactor: 1,
+                                        child: FittedBox(
+                                          fit: BoxFit.scaleDown,
+                                          child: Text(
+                                            '第 ${_productPage + 1} 页',
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                    TextButton(
+                                      onPressed: _loading || !_productHasNext
+                                          ? null
+                                          : () => _changeProductPage(1),
+                                      child: const Text('下一页'),
+                                    ),
+                                  ],
+                                ),
                               ),
                             ],
                           ),
                         ),
-                      ],
+                      ),
                     ),
-                  ),
-                ),
-              ),
-              SliverToBoxAdapter(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          '购物车 (${cart.itemCount})',
-                          style: Theme.of(context).textTheme.titleMedium,
+                    SliverToBoxAdapter(
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                '购物车 (${cart.itemCount})',
+                                style: Theme.of(context).textTheme.titleMedium,
+                              ),
+                            ),
+                            TextButton(
+                              onPressed: cart.items.isEmpty
+                                  ? null
+                                  : _editOrderDiscount,
+                              child: Text(
+                                cart.orderDiscountApplied > 0
+                                    ? '整单折扣 −${formatRm(cart.orderDiscountApplied)}'
+                                    : '整单折扣',
+                              ),
+                            ),
+                          ],
                         ),
                       ),
-                      TextButton(
-                        onPressed: cart.items.isEmpty
-                            ? null
-                            : _editOrderDiscount,
-                        child: Text(
-                          cart.orderDiscountApplied > 0
-                              ? '整单折扣 −${formatRm(cart.orderDiscountApplied)}'
-                              : '整单折扣',
+                    ),
+                    if (cart.items.isEmpty)
+                      const SliverToBoxAdapter(
+                        child: Padding(
+                          padding: EdgeInsets.symmetric(vertical: 32),
+                          child: Center(
+                            child: Text(
+                              '购物车为空\n搜索并点选商品',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(color: CnkhColors.muted),
+                            ),
+                          ),
+                        ),
+                      )
+                    else
+                      SliverPadding(
+                        padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                        sliver: SliverList(
+                          delegate: SliverChildBuilderDelegate((context, i) {
+                            final item = cart.items[i];
+                            return Padding(
+                              padding: const EdgeInsets.only(bottom: 8),
+                              child: _CartTile(
+                                item: item,
+                                onMinus: () => _adjust(item, -1),
+                                onPlus: () => _adjust(item, 1),
+                                onRemove: () => _remove(item),
+                                onDiscount: () => _editLineDiscount(item),
+                              ),
+                            );
+                          }, childCount: cart.items.length),
                         ),
                       ),
-                    ],
-                  ),
+                    // Even an empty/short cart must allow the controls and product
+                    // shelf to collapse. Fill only unused viewport space, never add
+                    // a second vertical scroll or a long tail to a populated cart.
+                    SliverLayoutBuilder(
+                      builder: (context, tailConstraints) {
+                        final minimumExtent =
+                            tailConstraints.viewportMainAxisExtent +
+                            shelfConstraints.precedingScrollExtent +
+                            (_imagesOn ? 76.0 : 40.0);
+                        final fill =
+                            (minimumExtent -
+                                    tailConstraints.precedingScrollExtent)
+                                .clamp(0.0, double.infinity);
+                        return SliverToBoxAdapter(
+                          child: SizedBox(height: fill),
+                        );
+                      },
+                    ),
+                  ],
                 ),
               ),
-              if (cart.items.isEmpty)
-                const SliverFillRemaining(
-                  hasScrollBody: false,
-                  child: Center(
-                    child: Text(
-                      '购物车为空\\n搜索并点选商品',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(color: CnkhColors.muted),
-                    ),
-                  ),
-                )
-              else
-                SliverPadding(
-                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-                  sliver: SliverList(
-                    delegate: SliverChildBuilderDelegate((context, i) {
-                      final item = cart.items[i];
-                      return Padding(
-                        padding: const EdgeInsets.only(bottom: 8),
-                        child: _CartTile(
-                          item: item,
-                          onMinus: () => _adjust(item, -1),
-                          onPlus: () => _adjust(item, 1),
-                          onRemove: () => _remove(item),
-                          onDiscount: () => _editLineDiscount(item),
-                        ),
-                      );
-                    }, childCount: cart.items.length),
-                  ),
-                ),
             ],
           ),
         ),
