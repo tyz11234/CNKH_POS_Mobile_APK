@@ -16,10 +16,8 @@ import 'package:cnkh_pos_mobile/screens/cart_screen.dart';
 import 'package:cnkh_pos_mobile/screens/checkout_screen.dart';
 import 'package:cnkh_pos_mobile/screens/sales_list_screen.dart';
 import 'package:cnkh_pos_mobile/screens/settings_screen.dart';
-import 'package:cnkh_pos_mobile/screens/barcode_scan_screen.dart';
 import 'package:cnkh_pos_mobile/screens/admin/admin_hub.dart';
 import 'package:cnkh_pos_mobile/screens/admin/products_admin.dart';
-import 'package:cnkh_pos_mobile/screens/admin/entities_page.dart';
 import 'package:cnkh_pos_mobile/screens/einvoice_status_screen.dart';
 import 'package:cnkh_pos_mobile/theme/cnkh_theme.dart';
 
