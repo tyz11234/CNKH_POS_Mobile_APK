@@ -11,6 +11,7 @@ import '../../services/barcode_labels.dart';
 import '../../services/pos_repository.dart';
 import '../../services/product_images.dart';
 import '../../theme/cnkh_theme.dart';
+import '../../widgets/paged_list_footer.dart';
 import '../../widgets/money_text.dart';
 
 class ProductsAdminPage extends StatefulWidget {
@@ -28,6 +29,8 @@ class _ProductsAdminPageState extends State<ProductsAdminPage> {
   bool _selectMode = false;
   bool _imagesOn = false;
   bool _busy = false;
+  bool _loading = true;
+  String? _loadError;
   static const _pageSize = 50;
   int _page = 0;
   bool _hasNext = false;
@@ -61,28 +64,40 @@ class _ProductsAdminPageState extends State<ProductsAdminPage> {
 
   Future<void> _load() async {
     final version = ++_loadVersion;
-    final list = await widget.repo.searchProducts(
-      _q.text,
-      limit: _pageSize + 1,
-      offset: _page * _pageSize,
-    );
-    if (!mounted || version != _loadVersion) return;
-    if (list.isEmpty && _page > 0) {
-      _page--;
-      await _load();
-      return;
-    }
     setState(() {
-      _hasNext = list.length > _pageSize;
-      _items = list.take(_pageSize).toList(growable: false);
-      _selected.removeWhere((id) => !_items.any((p) => p.id == id));
-      if (_selected.isEmpty) _selectMode = false;
+      _loading = true;
+      _loadError = null;
     });
+    try {
+      final list = await widget.repo.searchProducts(
+        _q.text,
+        limit: _pageSize + 1,
+        offset: _page * _pageSize,
+      );
+      if (!mounted || version != _loadVersion) return;
+      if (list.isEmpty && _page > 0) {
+        _page--;
+        await _load();
+        return;
+      }
+      setState(() {
+        _hasNext = list.length > _pageSize;
+        _items = list.take(_pageSize).toList(growable: false);
+        _selected.removeWhere((id) => !_items.any((p) => p.id == id));
+        if (_selected.isEmpty) _selectMode = false;
+      });
+    } catch (_) {
+      if (mounted && version == _loadVersion) {
+        setState(() => _loadError = '读取失败，请重试 / Could not load records');
+      }
+    } finally {
+      if (mounted && version == _loadVersion) setState(() => _loading = false);
+    }
   }
 
   Future<void> _changePage(int delta) async {
     final next = _page + delta;
-    if (next < 0 || (delta > 0 && !_hasNext) || _busy) return;
+    if (next < 0 || (delta > 0 && !_hasNext) || _busy || _loading) return;
     setState(() {
       _page = next;
       _selected.clear();
@@ -149,7 +164,9 @@ class _ProductsAdminPageState extends State<ProductsAdminPage> {
           ? ''
           : centsToRm(existing.priceCents).toStringAsFixed(2),
     );
-    final stock = TextEditingController(text: existing?.stock.toString() ?? '0');
+    final stock = TextEditingController(
+      text: existing?.stock.toString() ?? '0',
+    );
     final unit = TextEditingController(text: existing?.unit ?? 'pcs');
     final cat = TextEditingController(text: existing?.category ?? '');
     final reorder = TextEditingController(
@@ -207,14 +224,19 @@ class _ProductsAdminPageState extends State<ProductsAdminPage> {
                 if (barcodeMode == 'manual')
                   TextField(
                     controller: barcode,
-                    decoration: const InputDecoration(labelText: 'Barcode / 条码'),
+                    decoration: const InputDecoration(
+                      labelText: 'Barcode / 条码',
+                    ),
                   )
                 else
                   Text(
                     existing?.barcode.trim().isNotEmpty == true
                         ? '将保留或保存时自动生成（若空）\nKeep existing, or auto-generate if empty'
                         : '保存时自动生成 EAN-13 条码 / Auto EAN-13 on save',
-                    style: const TextStyle(fontSize: 12, color: CnkhColors.muted),
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: CnkhColors.muted,
+                    ),
                   ),
                 TextField(
                   controller: price,
@@ -371,7 +393,10 @@ class _ProductsAdminPageState extends State<ProductsAdminPage> {
               onTap: () => Navigator.pop(ctx, 'export'),
             ),
             ListTile(
-              leading: const Icon(Icons.delete_outline, color: CnkhColors.danger),
+              leading: const Icon(
+                Icons.delete_outline,
+                color: CnkhColors.danger,
+              ),
               title: const Text('删除 / Delete'),
               onTap: () => Navigator.pop(ctx, 'del'),
             ),
@@ -401,9 +426,8 @@ class _ProductsAdminPageState extends State<ProductsAdminPage> {
         await widget.repo.softDeleteProduct(p.id);
         await _load();
         if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('商品已删除')),
-        );
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('商品已删除')));
       }
     } catch (e) {
       if (!mounted) return;
@@ -430,9 +454,8 @@ class _ProductsAdminPageState extends State<ProductsAdminPage> {
         _selected.clear();
         _selectMode = false;
       });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('已删除 $deleted 个商品')),
-      );
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('已删除 $deleted 个商品')));
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -455,9 +478,8 @@ class _ProductsAdminPageState extends State<ProductsAdminPage> {
       if (kind == 'queue') {
         await _labels.enqueueMany(sel);
         if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('已加入 ${sel.length} 项到打印队列')),
-        );
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('已加入 ${sel.length} 项到打印队列')));
       } else if (kind == 'export') {
         final files = await _labels.exportMany(sel);
         if (files.isEmpty) {
@@ -524,16 +546,18 @@ class _ProductsAdminPageState extends State<ProductsAdminPage> {
               onPressed: _busy
                   ? null
                   : () => setState(() {
-                        _selected.clear();
-                        _selectMode = false;
-                      }),
+                      _selected.clear();
+                      _selectMode = false;
+                    }),
               icon: const Icon(Icons.close),
             ),
           ] else ...[
             IconButton(
               tooltip: '多选',
               icon: const Icon(Icons.checklist),
-              onPressed: _busy ? null : () => setState(() => _selectMode = true),
+              onPressed: _busy
+                  ? null
+                  : () => setState(() => _selectMode = true),
             ),
             IconButton(
               onPressed: _busy ? null : () => _edit(),
@@ -542,24 +566,12 @@ class _ProductsAdminPageState extends State<ProductsAdminPage> {
           ],
         ],
       ),
-      bottomNavigationBar: SafeArea(
-        top: false,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
-          child: Row(
-            children: [
-              OutlinedButton(
-                onPressed: _page == 0 || _busy ? null : () => _changePage(-1),
-                child: const Text('上一页'),
-              ),
-              Expanded(child: Center(child: Text('第 ${_page + 1} 页'))),
-              OutlinedButton(
-                onPressed: !_hasNext || _busy ? null : () => _changePage(1),
-                child: const Text('下一页'),
-              ),
-            ],
-          ),
-        ),
+      bottomNavigationBar: PagedListFooter(
+        page: _page,
+        onPrevious: _page == 0 || _busy || _loading
+            ? null
+            : () => _changePage(-1),
+        onNext: !_hasNext || _busy || _loading ? null : () => _changePage(1),
       ),
       body: Stack(
         children: [
@@ -607,87 +619,107 @@ class _ProductsAdminPageState extends State<ProductsAdminPage> {
                   ),
                 ),
               Expanded(
-                child: ListView.builder(
-                  itemCount: _items.length,
-                  itemBuilder: (context, i) {
-                    final p = _items[i];
-                    final sel = _selected.contains(p.id);
-                    return ListTile(
-                      leading: _selectMode
-                          ? Checkbox(
-                              value: sel,
-                              onChanged: _busy
-                                  ? null
-                                  : (v) => setState(() {
-                                        if (v == true) {
-                                          _selected.add(p.id);
-                                        } else {
-                                          _selected.remove(p.id);
-                                          if (_selected.isEmpty) {
-                                            _selectMode = false;
-                                          }
-                                        }
-                                      }),
-                            )
-                          : (_imagesOn &&
-                                  p.imagePath.isNotEmpty &&
-                                  File(p.imagePath).existsSync())
-                              ? ClipRRect(
-                                  borderRadius: BorderRadius.circular(8),
-                                  child: Image.file(
-                                    File(p.imagePath),
-                                    width: 48,
-                                    height: 48,
-                                    fit: BoxFit.cover,
-                                  ),
-                                )
-                              : CircleAvatar(
-                                  backgroundColor: CnkhColors.softBlue,
-                                  child: Text(
-                                    p.category.isEmpty
-                                        ? '?'
-                                        : p.category.substring(0, 1),
-                                    style: const TextStyle(
-                                      color: CnkhColors.navy,
-                                      fontWeight: FontWeight.w800,
+                child: _loading
+                    ? const Center(child: CircularProgressIndicator())
+                    : _loadError != null
+                    ? ListLoadMessage(message: _loadError!, onRetry: _load)
+                    : _items.isEmpty
+                    ? ListLoadMessage(
+                        message: _q.text.isEmpty
+                            ? '暂无商品 / No products'
+                            : '没有匹配的商品 / No matching products',
+                      )
+                    : RefreshIndicator(
+                        onRefresh: _load,
+                        child: ListView.builder(
+                          physics: const AlwaysScrollableScrollPhysics(),
+                          itemCount: _items.length,
+                          itemBuilder: (context, i) {
+                            final p = _items[i];
+                            final sel = _selected.contains(p.id);
+                            return ListTile(
+                              leading: _selectMode
+                                  ? Checkbox(
+                                      value: sel,
+                                      onChanged: _busy
+                                          ? null
+                                          : (v) => setState(() {
+                                              if (v == true) {
+                                                _selected.add(p.id);
+                                              } else {
+                                                _selected.remove(p.id);
+                                                if (_selected.isEmpty) {
+                                                  _selectMode = false;
+                                                }
+                                              }
+                                            }),
+                                    )
+                                  : (_imagesOn &&
+                                        p.imagePath.isNotEmpty &&
+                                        File(p.imagePath).existsSync())
+                                  ? ClipRRect(
+                                      borderRadius: BorderRadius.circular(8),
+                                      child: Image.file(
+                                        File(p.imagePath),
+                                        width: 48,
+                                        height: 48,
+                                        fit: BoxFit.cover,
+                                      ),
+                                    )
+                                  : CircleAvatar(
+                                      backgroundColor: CnkhColors.softBlue,
+                                      child: Text(
+                                        p.category.isEmpty
+                                            ? '?'
+                                            : p.category.substring(0, 1),
+                                        style: const TextStyle(
+                                          color: CnkhColors.navy,
+                                          fontWeight: FontWeight.w800,
+                                        ),
+                                      ),
                                     ),
-                                  ),
+                              title: Text(
+                                p.nameZh,
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w700,
                                 ),
-                      title: Text(
-                        p.nameZh,
-                        style: const TextStyle(fontWeight: FontWeight.w700),
+                              ),
+                              subtitle: Text(
+                                '${p.sku} · ${p.barcode}\n${p.category.isEmpty ? "未分类" : p.category} · 库存 ${p.stock} ${p.unit}',
+                              ),
+                              isThreeLine: true,
+                              trailing: MoneyText(
+                                amountCents: p.priceCents,
+                                fontSize: 14,
+                              ),
+                              selected: sel,
+                              onTap: _busy
+                                  ? null
+                                  : () {
+                                      if (_selectMode) {
+                                        setState(() {
+                                          if (sel) {
+                                            _selected.remove(p.id);
+                                            if (_selected.isEmpty)
+                                              _selectMode = false;
+                                          } else {
+                                            _selected.add(p.id);
+                                          }
+                                        });
+                                      } else {
+                                        _productActions(p);
+                                      }
+                                    },
+                              onLongPress: _busy
+                                  ? null
+                                  : () => setState(() {
+                                      _selectMode = true;
+                                      _selected.add(p.id);
+                                    }),
+                            );
+                          },
+                        ),
                       ),
-                      subtitle: Text(
-                        '${p.sku} · ${p.barcode}\n${p.category.isEmpty ? "未分类" : p.category} · 库存 ${p.stock} ${p.unit}',
-                      ),
-                      isThreeLine: true,
-                      trailing: MoneyText(amountCents: p.priceCents, fontSize: 14),
-                      selected: sel,
-                      onTap: _busy
-                          ? null
-                          : () {
-                              if (_selectMode) {
-                                setState(() {
-                                  if (sel) {
-                                    _selected.remove(p.id);
-                                    if (_selected.isEmpty) _selectMode = false;
-                                  } else {
-                                    _selected.add(p.id);
-                                  }
-                                });
-                              } else {
-                                _productActions(p);
-                              }
-                            },
-                      onLongPress: _busy
-                          ? null
-                          : () => setState(() {
-                                _selectMode = true;
-                                _selected.add(p.id);
-                              }),
-                    );
-                  },
-                ),
               ),
             ],
           ),
@@ -773,9 +805,7 @@ class _CategoriesAdminPageState extends State<CategoriesAdminPage> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('确认删除分类？'),
-        content: Text(
-          '确定删除「${category.name}」吗？\n该分类下的商品不会被删除，只会改成未分类。',
-        ),
+        content: Text('确定删除「${category.name}」吗？\n该分类下的商品不会被删除，只会改成未分类。'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
@@ -792,9 +822,8 @@ class _CategoriesAdminPageState extends State<CategoriesAdminPage> {
     try {
       final n = await widget.repo.deleteCategory(category.id);
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('已删除；$n 个商品改为未分类')),
-      );
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('已删除；$n 个商品改为未分类')));
       await _load();
     } catch (e) {
       if (!mounted) return;
@@ -810,7 +839,10 @@ class _CategoriesAdminPageState extends State<CategoriesAdminPage> {
       appBar: AppBar(
         title: const Text('分类管理 / Categories'),
         actions: [
-          IconButton(onPressed: () => _addOrRename(), icon: const Icon(Icons.add)),
+          IconButton(
+            onPressed: () => _addOrRename(),
+            icon: const Icon(Icons.add),
+          ),
         ],
       ),
       body: ListView.builder(
@@ -818,7 +850,10 @@ class _CategoriesAdminPageState extends State<CategoriesAdminPage> {
         itemBuilder: (context, i) {
           final c = _items[i];
           return ListTile(
-            title: Text(c.name, style: const TextStyle(fontWeight: FontWeight.w700)),
+            title: Text(
+              c.name,
+              style: const TextStyle(fontWeight: FontWeight.w700),
+            ),
             trailing: Wrap(
               children: [
                 IconButton(
@@ -826,7 +861,10 @@ class _CategoriesAdminPageState extends State<CategoriesAdminPage> {
                   onPressed: () => _addOrRename(c),
                 ),
                 IconButton(
-                  icon: const Icon(Icons.delete_outline, color: CnkhColors.danger),
+                  icon: const Icon(
+                    Icons.delete_outline,
+                    color: CnkhColors.danger,
+                  ),
                   onPressed: () => _deleteCategory(c),
                 ),
               ],
@@ -864,9 +902,8 @@ class _BarcodeQueuePageState extends State<BarcodeQueuePage> {
   Future<void> _exportQueue() async {
     if (_busy) return;
     if (_rows.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('打印队列为空 / Queue empty')),
-      );
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('打印队列为空 / Queue empty')));
       return;
     }
     setState(() => _busy = true);

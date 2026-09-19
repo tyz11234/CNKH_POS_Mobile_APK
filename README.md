@@ -4,29 +4,40 @@
 
 基于 **Flutter / Dart**，使用本地 SQLite 保存业务数据。核心收银与店内同步不依赖云服务器。
 
-> README 最后更新：**2026-09-14**。`main` 是完整源码与发布分支；`source/main` 仅保留为兼容分支。
+> README 最后更新：**2026-09-19**。`main` 是完整源码与发布分支；`source/main` 仅保留为兼容分支。
 
 ## 当前正式版本
 
 | 项目 | 当前版本 |
 | --- | --- |
-| Mobile | **1.10.0+28 / `v1.10.0-mobile`** |
+| Mobile | **1.10.1+29 / `v1.10.1-mobile`** |
 | 配套 Desktop | **0.4.0+9 / `v0.4.0`** |
 | LAN 协议 | `cnkh-sync:v1` |
 | OCR | 本机 Latin + Chinese ML Kit，不使用云 OCR |
 
 ### 下载
 
-- [Android APK](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/download/v1.10.0-mobile/CNKH_POS_Mobile.apk)
-- [版本化 APK（内容相同）](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/download/v1.10.0-mobile/CNKH_POS_Mobile_v1.10.0.apk)
-- [Release 与 SHA-256 校验文件](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/tag/v1.10.0-mobile)
+- [Android APK](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/download/v1.10.1-mobile/CNKH_POS_Mobile.apk)
+- [版本化 APK（内容相同）](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/download/v1.10.1-mobile/CNKH_POS_Mobile_v1.10.1.apk)
+- [Release 与 SHA-256 校验文件](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/tag/v1.10.1-mobile)
 - [配套电脑版](https://github.com/tyz11234/CNKH_POS_Desktop/releases/tag/v0.4.0)
 
-发布源码由 `v1.10.0-mobile` 标签定位；附件 `SHA256SUMS.txt` 给出本次 APK 校验值。
+发布源码由 `v1.10.1-mobile` 标签定位；附件 `SHA256SUMS.txt` 给出本次 APK 校验值。
+
+## 2026-09-19 手机界面修复（1.10.1）
+
+- 修复商品、客户和供应商页的分页栏撑满屏幕，导致有记录却显示空白的问题；分页栏保持在底部，列表恢复可见和可点击。
+- 列表增加加载中、空数据、读取失败及重试提示，保留已有分页、搜索、编辑和多选操作；已有记录列表可下拉刷新。
+- 收银页采用统一纵向滚动。向上滑动时顶部操作区移出，商品区域收缩为紧凑卡片，为购物车让出空间；滑回顶部恢复。商品仍可横向浏览和点击加购。
+- 空购物车和仅一件商品也能滑动收缩；合计及结账固定在底部，适配小屏、大字体和键盘弹出。
+- 员工培训增加收银页收缩后的实际截图；构建核验 16 组实际截图及箭头坐标。
+- 本次不修改数据库版本、销售计算、库存、LAN 协议、MyInvois 提交或 Desktop 代码。
+
+测试范围和构建记录见 [MOBILE_LAYOUT_REPORT.md](MOBILE_LAYOUT_REPORT.md)。此版本仍沿用原 debug 签名配置；若 Android 提示签名不一致，请先完成同步和备份，不要直接卸载带有未同步数据的旧版本。
 
 ## Malaysia e-Invoice / MyInvois
 
-本版本以独立模块加入 e-Invoice，保留原收银、商品、库存界面与离线销售。Desktop 负责调用 MyInvois；Mobile 只通过已有配对连接同步状态，不保存 MyInvois 凭据。
+自 1.10.0 起，e-Invoice 以独立模块接入并保留离线销售。Desktop 负责调用 MyInvois；Mobile 只通过已有配对连接同步状态，不保存 MyInvois 凭据。1.10.1 的界面调整仅处理上述已确认的手机布局问题。
 
 ### Desktop 设置与提交
 
@@ -390,7 +401,7 @@ flutter build apk --release
 
 ## 相关入口
 
-- Mobile v1.10.0：https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/tag/v1.10.0-mobile
+- Mobile v1.10.1：https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/tag/v1.10.1-mobile
 - Mobile 源码：https://github.com/tyz11234/CNKH_POS_Mobile_APK/tree/main
 - Desktop v0.4.0：https://github.com/tyz11234/CNKH_POS_Desktop/releases/tag/v0.4.0
 - OCR Mobile PR #6：https://github.com/tyz11234/CNKH_POS_Mobile_APK/pull/6

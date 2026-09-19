@@ -1,4 +1,5 @@
 import 'dart:io';
+
 import 'package:flutter/material.dart';
 
 import '../models/app_user.dart';
@@ -8,6 +9,7 @@ import '../models/product.dart';
 import '../services/pos_repository.dart';
 import '../theme/cnkh_theme.dart';
 import '../widgets/money_text.dart';
+import '../widgets/paged_list_footer.dart';
 import 'barcode_scan_screen.dart';
 import '../services/lan_sync.dart';
 
@@ -43,6 +45,7 @@ class _CartScreenState extends State<CartScreen> {
   List<Category> _categories = [];
   String _category = ''; // empty = 全部
   bool _loading = true;
+  String? _productError;
   bool _imagesOn = false;
   static const _productPageSize = 40;
   int _productPage = 0;
@@ -76,24 +79,37 @@ class _CartScreenState extends State<CartScreen> {
 
   Future<void> _reload(String q) async {
     final request = ++_productRequest;
-    if (mounted) setState(() => _loading = true);
-    final list = await widget.repo.searchProducts(
-      q,
-      limit: _productPageSize + 1,
-      offset: _productPage * _productPageSize,
-      category: _category.isEmpty ? null : _category,
-    );
-    if (!mounted || request != _productRequest) return;
-    if (list.isEmpty && _productPage > 0) {
-      _productPage--;
-      await _reload(q);
-      return;
+    if (mounted)
+      setState(() {
+        _loading = true;
+        _productError = null;
+      });
+    try {
+      final list = await widget.repo.searchProducts(
+        q,
+        limit: _productPageSize + 1,
+        offset: _productPage * _productPageSize,
+        category: _category.isEmpty ? null : _category,
+      );
+      if (!mounted || request != _productRequest) return;
+      if (list.isEmpty && _productPage > 0) {
+        _productPage--;
+        await _reload(q);
+        return;
+      }
+      setState(() {
+        _productHasNext = list.length > _productPageSize;
+        _results = list.take(_productPageSize).toList(growable: false);
+        _loading = false;
+      });
+    } catch (_) {
+      if (mounted && request == _productRequest) {
+        setState(() {
+          _productError = '商品读取失败，请重试';
+          _loading = false;
+        });
+      }
     }
-    setState(() {
-      _productHasNext = list.length > _productPageSize;
-      _results = list.take(_productPageSize).toList(growable: false);
-      _loading = false;
-    });
   }
 
   Future<void> _changeProductPage(int delta) async {
@@ -125,8 +141,14 @@ class _CartScreenState extends State<CartScreen> {
           title: const Text('库存不足 / Low stock'),
           content: Text('${p.nameZh}\n需要 $nextQty · 库存 $stock\n仍要加购？'),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
-            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('继续')),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('继续'),
+            ),
           ],
         ),
       );
@@ -134,8 +156,10 @@ class _CartScreenState extends State<CartScreen> {
     }
     if (existing != null) {
       existing.qty += addQty;
-      existing.discountCents =
-          clampDiscountCents(existing.discountCents, existing.grossCents);
+      existing.discountCents = clampDiscountCents(
+        existing.discountCents,
+        existing.grossCents,
+      );
     } else {
       widget.cart.items.add(CartItem(product: p, qty: addQty));
     }
@@ -148,8 +172,10 @@ class _CartScreenState extends State<CartScreen> {
     if (item.qty <= 0) {
       widget.cart.items.remove(item);
     } else {
-      item.discountCents =
-          clampDiscountCents(item.discountCents, item.grossCents);
+      item.discountCents = clampDiscountCents(
+        item.discountCents,
+        item.grossCents,
+      );
     }
     widget.onChanged();
   }
@@ -202,8 +228,14 @@ class _CartScreenState extends State<CartScreen> {
           ),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('确定')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('确定'),
+          ),
         ],
       ),
     );
@@ -244,15 +276,22 @@ class _CartScreenState extends State<CartScreen> {
           decoration: const InputDecoration(prefixText: 'RM '),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('确定')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('确定'),
+          ),
         ],
       ),
     );
     if (ok != true || !mounted) return;
     final oldOrder = widget.cart.orderDiscountCents;
-    widget.cart.orderDiscountCents =
-        rmToCents(double.tryParse(ctrl.text.trim()) ?? 0);
+    widget.cart.orderDiscountCents = rmToCents(
+      double.tryParse(ctrl.text.trim()) ?? 0,
+    );
     await widget.repo.logAudit(
       username: widget.user.username,
       role: widget.user.isAdmin ? 'ADMIN' : 'STAFF',
@@ -284,189 +323,297 @@ class _CartScreenState extends State<CartScreen> {
     final cart = widget.cart;
     final due = cart.payableCents(isCredit: false);
 
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final stripH = constraints.maxHeight < 560 ? 72.0 : 120.0;
-        return Column(
+    final textScale = MediaQuery.textScalerOf(context).scale(14) / 14;
+    final extra = (textScale - 1).clamp(0.0, 3.0) * 40;
+    final pagerHeight = 48.0 + extra * .3;
+    return Column(
       children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('收银台 / POS', style: Theme.of(context).textTheme.headlineMedium),
-              const SizedBox(height: 6),
-              TextField(
-                controller: _search,
-                decoration: const InputDecoration(
-                  hintText: '搜索 名称 / SKU / 条码',
-                  prefixIcon: Icon(Icons.search),
-                  isDense: true,
-                ),
-              ),
-              const SizedBox(height: 6),
-              SizedBox(
-                height: 36,
-                child: ListView(
-                  scrollDirection: Axis.horizontal,
-                  children: [
-                    Padding(
-                      padding: const EdgeInsets.only(right: 6),
-                      child: FilterChip(
-                        label: const Text('全部'),
-                        selected: _category.isEmpty,
-                        onSelected: (_) {
-                          setState(() {
-                            _category = '';
-                            _productPage = 0;
-                          });
-                          _reload(_search.text);
-                        },
+        Expanded(
+          child: CustomScrollView(
+            key: const PageStorageKey('pos-scroll'),
+            keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+            slivers: [
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '收银台 / POS',
+                        style: Theme.of(context).textTheme.headlineMedium,
                       ),
-                    ),
-                    for (final c in _categories)
-                      Padding(
-                        padding: const EdgeInsets.only(right: 6),
-                        child: FilterChip(
-                          label: Text(c.name),
-                          selected: _category == c.name,
-                          onSelected: (_) {
-                            setState(() {
-                              _category = c.name;
-                              _productPage = 0;
-                            });
-                            _reload(_search.text);
-                          },
+                      const SizedBox(height: 6),
+                      TextField(
+                        controller: _search,
+                        decoration: const InputDecoration(
+                          hintText: '搜索 名称 / SKU / 条码',
+                          prefixIcon: Icon(Icons.search),
+                          isDense: true,
                         ),
                       ),
+                      const SizedBox(height: 6),
+                      SizedBox(
+                        height: 36 * textScale.clamp(1.0, 2.0),
+                        child: ListView(
+                          scrollDirection: Axis.horizontal,
+                          children: [
+                            Padding(
+                              padding: const EdgeInsets.only(right: 6),
+                              child: FilterChip(
+                                label: const Text('全部'),
+                                selected: _category.isEmpty,
+                                onSelected: (_) {
+                                  setState(() {
+                                    _category = '';
+                                    _productPage = 0;
+                                  });
+                                  _reload(_search.text);
+                                },
+                              ),
+                            ),
+                            for (final c in _categories)
+                              Padding(
+                                padding: const EdgeInsets.only(right: 6),
+                                child: FilterChip(
+                                  label: Text(c.name),
+                                  selected: _category == c.name,
+                                  onSelected: (_) {
+                                    setState(() {
+                                      _category = c.name;
+                                      _productPage = 0;
+                                    });
+                                    _reload(_search.text);
+                                  },
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      SizedBox(
+                        width: double.infinity,
+                        height: 44 * textScale.clamp(1.0, 2.0),
+                        child: FilledButton.icon(
+                          style: FilledButton.styleFrom(
+                            backgroundColor: CnkhColors.navy,
+                          ),
+                          onPressed: _openScanner,
+                          icon: const Icon(Icons.qr_code_scanner),
+                          label: const Text(
+                            '扫码加购 / Scan barcode',
+                            style: TextStyle(fontWeight: FontWeight.w800),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Row(
+                        children: [
+                          Flexible(
+                            child: OutlinedButton.icon(
+                              onPressed: cart.items.isEmpty
+                                  ? null
+                                  : widget.onHold,
+                              icon: const Icon(
+                                Icons.pause_circle_outline,
+                                size: 18,
+                              ),
+                              label: const Text('挂单'),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Flexible(
+                            child: OutlinedButton.icon(
+                              onPressed: widget.onResume,
+                              icon: const Icon(
+                                Icons.play_circle_outline,
+                                size: 18,
+                              ),
+                              label: const Text('取单'),
+                            ),
+                          ),
+                          TextButton(
+                            onPressed: cart.items.isEmpty
+                                ? null
+                                : () {
+                                    cart.items.clear();
+                                    cart.orderDiscountCents = 0;
+                                    widget.onChanged();
+                                  },
+                            child: const Text('清空'),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              SliverLayoutBuilder(
+                builder: (context, shelfConstraints) => SliverMainAxisGroup(
+                  slivers: [
+                    SliverPersistentHeader(
+                      pinned: true,
+                      delegate: _ProductShelf(
+                        expandedHeight:
+                            (_imagesOn ? 160.0 : 124.0) + extra + pagerHeight,
+                        compactHeight: 84.0 + extra + pagerHeight,
+                        builder: (context, compact) => Material(
+                          color: Theme.of(context).scaffoldBackgroundColor,
+                          child: Column(
+                            children: [
+                              Expanded(
+                                child: _loading
+                                    ? const Center(
+                                        child: CircularProgressIndicator(),
+                                      )
+                                    : _productError != null
+                                    ? ListLoadMessage(
+                                        message: _productError!,
+                                        onRetry: () => _reload(_search.text),
+                                      )
+                                    : _results.isEmpty
+                                    ? const ListLoadMessage(
+                                        message:
+                                            '没有匹配的商品 / No matching products',
+                                      )
+                                    : ListView.separated(
+                                        key: const PageStorageKey(
+                                          'pos-products',
+                                        ),
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 16,
+                                        ),
+                                        scrollDirection: Axis.horizontal,
+                                        itemCount: _results.length,
+                                        separatorBuilder: (_, __) =>
+                                            const SizedBox(width: 8),
+                                        itemBuilder: (context, i) =>
+                                            _ProductChip(
+                                              product: _results[i],
+                                              showImage: _imagesOn,
+                                              compact: compact,
+                                              onTap: () {
+                                                _add(_results[i]);
+                                              },
+                                            ),
+                                      ),
+                              ),
+                              SizedBox(
+                                height: pagerHeight,
+                                child: Row(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    TextButton(
+                                      onPressed: _loading || _productPage == 0
+                                          ? null
+                                          : () => _changeProductPage(-1),
+                                      child: const Text('上一页'),
+                                    ),
+                                    Expanded(
+                                      child: Center(
+                                        heightFactor: 1,
+                                        child: FittedBox(
+                                          fit: BoxFit.scaleDown,
+                                          child: Text(
+                                            '第 ${_productPage + 1} 页',
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                    TextButton(
+                                      onPressed: _loading || !_productHasNext
+                                          ? null
+                                          : () => _changeProductPage(1),
+                                      child: const Text('下一页'),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                    SliverToBoxAdapter(
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                '购物车 (${cart.itemCount})',
+                                style: Theme.of(context).textTheme.titleMedium,
+                              ),
+                            ),
+                            TextButton(
+                              onPressed: cart.items.isEmpty
+                                  ? null
+                                  : _editOrderDiscount,
+                              child: Text(
+                                cart.orderDiscountApplied > 0
+                                    ? '整单折扣 −${formatRm(cart.orderDiscountApplied)}'
+                                    : '整单折扣',
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    if (cart.items.isEmpty)
+                      const SliverToBoxAdapter(
+                        child: Padding(
+                          padding: EdgeInsets.symmetric(vertical: 32),
+                          child: Center(
+                            child: Text(
+                              '购物车为空\n搜索并点选商品',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(color: CnkhColors.muted),
+                            ),
+                          ),
+                        ),
+                      )
+                    else
+                      SliverPadding(
+                        padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                        sliver: SliverList(
+                          delegate: SliverChildBuilderDelegate((context, i) {
+                            final item = cart.items[i];
+                            return Padding(
+                              padding: const EdgeInsets.only(bottom: 8),
+                              child: _CartTile(
+                                item: item,
+                                onMinus: () => _adjust(item, -1),
+                                onPlus: () => _adjust(item, 1),
+                                onRemove: () => _remove(item),
+                                onDiscount: () => _editLineDiscount(item),
+                              ),
+                            );
+                          }, childCount: cart.items.length),
+                        ),
+                      ),
+                    // Even an empty/short cart must allow the controls and product
+                    // shelf to collapse. Fill only unused viewport space, never add
+                    // a second vertical scroll or a long tail to a populated cart.
+                    SliverLayoutBuilder(
+                      builder: (context, tailConstraints) {
+                        final minimumExtent =
+                            tailConstraints.viewportMainAxisExtent +
+                            shelfConstraints.precedingScrollExtent +
+                            (_imagesOn ? 76.0 : 40.0);
+                        final fill =
+                            (minimumExtent -
+                                    tailConstraints.precedingScrollExtent)
+                                .clamp(0.0, double.infinity);
+                        return SliverToBoxAdapter(
+                          child: SizedBox(height: fill),
+                        );
+                      },
+                    ),
                   ],
                 ),
               ),
-              const SizedBox(height: 6),
-              SizedBox(
-                width: double.infinity,
-                height: 44,
-                child: FilledButton.icon(
-                  style: FilledButton.styleFrom(
-                    backgroundColor: CnkhColors.navy,
-                  ),
-                  onPressed: _openScanner,
-                  icon: const Icon(Icons.qr_code_scanner),
-                  label: const Text('扫码加购 / Scan barcode',
-                      style: TextStyle(fontWeight: FontWeight.w800)),
-                ),
-              ),
-              const SizedBox(height: 6),
-              Row(
-                children: [
-                  Flexible(
-                    child: OutlinedButton.icon(
-                      onPressed: cart.items.isEmpty ? null : widget.onHold,
-                      icon: const Icon(Icons.pause_circle_outline, size: 18),
-                      label: const Text('挂单'),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Flexible(
-                    child: OutlinedButton.icon(
-                      onPressed: widget.onResume,
-                      icon: const Icon(Icons.play_circle_outline, size: 18),
-                      label: const Text('取单'),
-                    ),
-                  ),
-                  TextButton(
-                    onPressed: cart.items.isEmpty
-                        ? null
-                        : () {
-                            cart.items.clear();
-                            cart.orderDiscountCents = 0;
-                            widget.onChanged();
-                          },
-                    child: const Text('清空'),
-                  ),
-                ],
-              ),
             ],
           ),
-        ),
-        SizedBox(
-          height: stripH,
-          child: _loading
-              ? const Center(child: CircularProgressIndicator())
-              : ListView.separated(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  scrollDirection: Axis.horizontal,
-                  itemCount: _results.length,
-                  separatorBuilder: (_, __) => const SizedBox(width: 8),
-                  itemBuilder: (context, i) {
-                    final p = _results[i];
-                    return _ProductChip(product: p, showImage: _imagesOn, onTap: () { _add(p); });
-                  },
-                ),
-        ),
-        SizedBox(
-          height: 40,
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              TextButton(
-                onPressed: _loading || _productPage == 0
-                    ? null
-                    : () => _changeProductPage(-1),
-                child: const Text('上一页'),
-              ),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                child: Text('第 ${_productPage + 1} 页'),
-              ),
-              TextButton(
-                onPressed: _loading || !_productHasNext
-                    ? null
-                    : () => _changeProductPage(1),
-                child: const Text('下一页'),
-              ),
-            ],
-          ),
-        ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-          child: Row(
-            children: [
-              Text('购物车 (${cart.itemCount})',
-                  style: Theme.of(context).textTheme.titleMedium),
-              const Spacer(),
-              TextButton(
-                onPressed: cart.items.isEmpty ? null : _editOrderDiscount,
-                child: Text(
-                  cart.orderDiscountApplied > 0
-                      ? '整单折扣 −${formatRm(cart.orderDiscountApplied)}'
-                      : '整单折扣',
-                ),
-              ),
-            ],
-          ),
-        ),
-        Expanded(
-          child: cart.items.isEmpty
-              ? const Center(
-                  child: Text('购物车为空\n搜索并点选商品',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(color: CnkhColors.muted)))
-              : ListView.separated(
-                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-                  itemCount: cart.items.length,
-                  separatorBuilder: (_, __) => const SizedBox(height: 8),
-                  itemBuilder: (context, i) {
-                    final item = cart.items[i];
-                    return _CartTile(
-                      item: item,
-                      onMinus: () => _adjust(item, -1),
-                      onPlus: () => _adjust(item, 1),
-                      onRemove: () => _remove(item),
-                      onDiscount: () => _editLineDiscount(item),
-                    );
-                  },
-                ),
         ),
         Material(
           elevation: 8,
@@ -487,16 +634,23 @@ class _CartScreenState extends State<CartScreen> {
                         Text(
                           '合计 / Total · ${cart.itemCount} 件',
                           style: const TextStyle(
-                              color: CnkhColors.muted, fontSize: 12),
+                            color: CnkhColors.muted,
+                            fontSize: 12,
+                          ),
                           overflow: TextOverflow.ellipsis,
                         ),
                         FittedBox(
                           fit: BoxFit.scaleDown,
                           alignment: Alignment.centerLeft,
                           child: MoneyText(
-                              amountCents: due, fontSize: 26, hero: true),
+                            amountCents: due,
+                            fontSize: 26,
+                            hero: true,
+                          ),
                         ),
-                        if (cart.itemDiscountsCents + cart.orderDiscountApplied > 0)
+                        if (cart.itemDiscountsCents +
+                                cart.orderDiscountApplied >
+                            0)
                           Text(
                             '折扣 −${formatRm(cart.itemDiscountsCents + cart.orderDiscountApplied)}',
                             style: const TextStyle(
@@ -512,18 +666,26 @@ class _CartScreenState extends State<CartScreen> {
                   Expanded(
                     flex: 4,
                     child: SizedBox(
-                      height: 56,
+                      height: 56 * textScale.clamp(1.0, 2.0),
                       child: FilledButton(
                         style: FilledButton.styleFrom(
                           backgroundColor: CnkhColors.success,
                           disabledBackgroundColor: CnkhColors.border,
                         ),
-                        onPressed:
-                            cart.items.isEmpty ? null : widget.onCheckout,
-                        child: const Text('结账\nCheckout',
+                        onPressed: cart.items.isEmpty
+                            ? null
+                            : widget.onCheckout,
+                        child: const FittedBox(
+                          fit: BoxFit.scaleDown,
+                          child: Text(
+                            '结账\nCheckout',
                             textAlign: TextAlign.center,
                             style: TextStyle(
-                                height: 1.15, fontWeight: FontWeight.w900)),
+                              height: 1.15,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                        ),
                       ),
                     ),
                   ),
@@ -534,19 +696,47 @@ class _CartScreenState extends State<CartScreen> {
         ),
       ],
     );
-      },
-    );
   }
+}
+
+class _ProductShelf extends SliverPersistentHeaderDelegate {
+  _ProductShelf({
+    required this.expandedHeight,
+    required this.compactHeight,
+    required this.builder,
+  });
+  final double expandedHeight;
+  final double compactHeight;
+  final Widget Function(BuildContext, bool) builder;
+  @override
+  double get maxExtent => expandedHeight;
+  @override
+  double get minExtent => compactHeight;
+  @override
+  Widget build(
+    BuildContext context,
+    double shrinkOffset,
+    bool overlapsContent,
+  ) => builder(context, shrinkOffset > (maxExtent - minExtent) * .45);
+  @override
+  bool shouldRebuild(covariant _ProductShelf oldDelegate) => true;
 }
 
 class _ProductChip extends StatelessWidget {
   final Product product;
   final VoidCallback onTap;
   final bool showImage;
-  const _ProductChip({required this.product, required this.onTap, this.showImage = false});
+  final bool compact;
+  const _ProductChip({
+    required this.product,
+    required this.onTap,
+    this.showImage = false,
+    this.compact = false,
+  });
   @override
   Widget build(BuildContext context) {
-    final hasImg = showImage &&
+    final hasImg =
+        showImage &&
         product.imagePath.isNotEmpty &&
         File(product.imagePath).existsSync();
     return Material(
@@ -565,26 +755,42 @@ class _ProductChip extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              if (hasImg)
+              if (hasImg && !compact)
                 ClipRRect(
                   borderRadius: BorderRadius.circular(8),
-                  child: Image.file(File(product.imagePath),
-                      height: 36, width: double.infinity, fit: BoxFit.cover),
+                  child: Image.file(
+                    File(product.imagePath),
+                    height: 36,
+                    width: double.infinity,
+                    fit: BoxFit.cover,
+                  ),
                 ),
-              Text(product.nameZh,
+              Text(
+                product.nameZh,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontWeight: FontWeight.w800),
+              ),
+              if (!compact)
+                Text(
+                  product.sku,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontWeight: FontWeight.w800)),
-              Text(product.sku,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: CnkhColors.muted, fontSize: 11)),
+                  style: const TextStyle(color: CnkhColors.muted, fontSize: 11),
+                ),
               const Spacer(),
               Row(
                 children: [
                   Expanded(
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: Alignment.centerLeft,
                       child: MoneyText(
-                          amountCents: product.priceCents, fontSize: 14)),
+                        amountCents: product.priceCents,
+                        fontSize: 14,
+                      ),
+                    ),
+                  ),
                   Container(
                     width: 28,
                     height: 28,
@@ -629,8 +835,10 @@ class _CartTile extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(item.product.nameZh,
-                      style: const TextStyle(fontWeight: FontWeight.w800)),
+                  Text(
+                    item.product.nameZh,
+                    style: const TextStyle(fontWeight: FontWeight.w800),
+                  ),
                   Text(
                     item.lineDiscountCents > 0
                         ? '${formatRm(item.grossCents)} → ${formatRm(item.lineTotalCents)} (−${formatRm(item.lineDiscountCents)})'
@@ -644,19 +852,28 @@ class _CartTile extends StatelessWidget {
                       minimumSize: const Size(0, 28),
                       tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                     ),
-                    child: const Text('行折扣 / Discount',
-                        style: TextStyle(fontSize: 12)),
+                    child: const Text(
+                      '行折扣 / Discount',
+                      style: TextStyle(fontSize: 12),
+                    ),
                   ),
                 ],
               ),
             ),
-            IconButton(onPressed: onRemove, icon: const Icon(Icons.delete_outline, color: CnkhColors.danger)),
+            IconButton(
+              onPressed: onRemove,
+              icon: const Icon(Icons.delete_outline, color: CnkhColors.danger),
+            ),
             _QtyBtn(icon: Icons.remove, onTap: onMinus),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 8),
-              child: Text('${item.qty}',
-                  style: const TextStyle(
-                      fontSize: 18, fontWeight: FontWeight.w800)),
+              child: Text(
+                '${item.qty}',
+                style: const TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
             ),
             _QtyBtn(icon: Icons.add, onTap: onPlus),
           ],
@@ -679,7 +896,10 @@ class _QtyBtn extends StatelessWidget {
         onTap: onTap,
         borderRadius: BorderRadius.circular(10),
         child: SizedBox(
-            width: 40, height: 40, child: Icon(icon, color: CnkhColors.navy)),
+          width: 40,
+          height: 40,
+          child: Icon(icon, color: CnkhColors.navy),
+        ),
       ),
     );
   }

@@ -3,16 +3,14 @@ import 'package:flutter/material.dart';
 import '../../db/app_database.dart';
 import '../../services/pos_repository.dart';
 import '../../theme/cnkh_theme.dart';
+import '../../widgets/paged_list_footer.dart';
 
 class EntitiesPage extends StatefulWidget {
   final PosRepository repo;
   final String kind; // customers | suppliers
 
-  const EntitiesPage({
-    super.key,
-    required this.repo,
-    required this.kind,
-  }) : assert(kind == 'customers' || kind == 'suppliers');
+  const EntitiesPage({super.key, required this.repo, required this.kind})
+    : assert(kind == 'customers' || kind == 'suppliers');
 
   @override
   State<EntitiesPage> createState() => _EntitiesPageState();
@@ -23,6 +21,8 @@ class _EntitiesPageState extends State<EntitiesPage> {
   final Set<String> _selected = <String>{};
   bool _selectMode = false;
   bool _busy = false;
+  bool _loading = true;
+  String? _loadError;
   static const _pageSize = 50;
   int _page = 0;
   bool _hasNext = false;
@@ -42,34 +42,44 @@ class _EntitiesPageState extends State<EntitiesPage> {
 
   Future<void> _load() async {
     final version = ++_loadVersion;
-    final items = _isCustomers
-        ? await widget.repo.listCustomers(
-            limit: _pageSize + 1,
-            offset: _page * _pageSize,
-          )
-        : await widget.repo.listSuppliers(
-            limit: _pageSize + 1,
-            offset: _page * _pageSize,
-          );
-    if (!mounted || version != _loadVersion) return;
-    if (items.isEmpty && _page > 0) {
-      _page--;
-      await _load();
-      return;
-    }
     setState(() {
-      _hasNext = items.length > _pageSize;
-      _items = items.take(_pageSize).cast<Object>().toList(growable: false);
-      _selected.removeWhere(
-        (id) => !_items.any((item) => _idOf(item) == id),
-      );
-      if (_selected.isEmpty) _selectMode = false;
+      _loading = true;
+      _loadError = null;
     });
+    try {
+      final items = _isCustomers
+          ? await widget.repo.listCustomers(
+              limit: _pageSize + 1,
+              offset: _page * _pageSize,
+            )
+          : await widget.repo.listSuppliers(
+              limit: _pageSize + 1,
+              offset: _page * _pageSize,
+            );
+      if (!mounted || version != _loadVersion) return;
+      if (items.isEmpty && _page > 0) {
+        _page--;
+        await _load();
+        return;
+      }
+      setState(() {
+        _hasNext = items.length > _pageSize;
+        _items = items.take(_pageSize).cast<Object>().toList(growable: false);
+        _selected.removeWhere((id) => !_items.any((item) => _idOf(item) == id));
+        if (_selected.isEmpty) _selectMode = false;
+      });
+    } catch (_) {
+      if (mounted && version == _loadVersion) {
+        setState(() => _loadError = '读取失败，请重试 / Could not load records');
+      }
+    } finally {
+      if (mounted && version == _loadVersion) setState(() => _loading = false);
+    }
   }
 
   Future<void> _changePage(int delta) async {
     final next = _page + delta;
-    if (next < 0 || (delta > 0 && !_hasNext) || _busy) return;
+    if (next < 0 || (delta > 0 && !_hasNext) || _busy || _loading) return;
     setState(() {
       _page = next;
       _selected.clear();
@@ -182,9 +192,7 @@ class _EntitiesPageState extends State<EntitiesPage> {
       await _load();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(existing == null ? '已新增' : '已保存修改'),
-          ),
+          SnackBar(content: Text(existing == null ? '已新增' : '已保存修改')),
         );
       }
     } catch (e) {
@@ -237,9 +245,8 @@ class _EntitiesPageState extends State<EntitiesPage> {
       }
       await _load();
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('已删除')),
-        );
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('已删除')));
       }
     } catch (e) {
       if (mounted) {
@@ -273,9 +280,8 @@ class _EntitiesPageState extends State<EntitiesPage> {
         _selected.clear();
         _selectMode = false;
       });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('已删除 $deleted 项')),
-      );
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('已删除 $deleted 项')));
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -324,9 +330,9 @@ class _EntitiesPageState extends State<EntitiesPage> {
                 onPressed: _busy
                     ? null
                     : () => setState(() {
-                          _selected.clear();
-                          _selectMode = false;
-                        }),
+                        _selected.clear();
+                        _selectMode = false;
+                      }),
                 icon: const Icon(Icons.close),
               )
             : null,
@@ -350,83 +356,92 @@ class _EntitiesPageState extends State<EntitiesPage> {
             ),
         ],
       ),
-      bottomNavigationBar: SafeArea(
-        top: false,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
-          child: Row(
-            children: [
-              OutlinedButton(
-                onPressed: _page == 0 || _busy ? null : () => _changePage(-1),
-                child: const Text('上一页'),
-              ),
-              Expanded(child: Center(child: Text('第 ${_page + 1} 页'))),
-              OutlinedButton(
-                onPressed: !_hasNext || _busy ? null : () => _changePage(1),
-                child: const Text('下一页'),
-              ),
-            ],
-          ),
-        ),
+      bottomNavigationBar: PagedListFooter(
+        page: _page,
+        onPrevious: _page == 0 || _busy || _loading
+            ? null
+            : () => _changePage(-1),
+        onNext: !_hasNext || _busy || _loading ? null : () => _changePage(1),
       ),
       body: Stack(
+        fit: StackFit.expand,
         children: [
-          ListView.builder(
-            itemCount: _items.length,
-            itemBuilder: (context, i) {
-              final item = _items[i];
-              final id = _idOf(item);
-              final selected = _selected.contains(id);
-              late final String title;
-              late final String subtitle;
-              if (item is Customer) {
-                title = item.name;
-                subtitle =
-                    '${item.phone}${item.notes.isEmpty ? '' : '\n${item.notes}'}';
-              } else {
-                final supplier = item as Supplier;
-                title = supplier.name;
-                subtitle =
-                    '${supplier.phone}${supplier.email.isEmpty ? '' : '\n${supplier.email}'}';
-              }
-              return ListTile(
-                leading: _selectMode
-                    ? Checkbox(
-                        value: selected,
-                        onChanged: _busy ? null : (_) => _toggle(item),
-                      )
-                    : CircleAvatar(child: Text(title.isEmpty ? '?' : title[0])),
-                title: Text(title),
-                subtitle: Text(subtitle),
-                selected: selected,
-                onLongPress: _busy ? null : () => _toggle(item),
-                onTap: _busy
-                    ? null
-                    : () {
-                        if (_selectMode) {
-                          _toggle(item);
-                        } else {
-                          _edit(item);
-                        }
-                      },
-                trailing: _selectMode
-                    ? null
-                    : PopupMenuButton<String>(
-                        onSelected: (action) {
-                          if (action == 'edit') _edit(item);
-                          if (action == 'delete') _deleteOne(item);
-                        },
-                        itemBuilder: (_) => const [
-                          PopupMenuItem(value: 'edit', child: Text('编辑 / Edit')),
-                          PopupMenuItem(
-                            value: 'delete',
-                            child: Text('删除 / Delete'),
+          if (_loading)
+            const Center(child: CircularProgressIndicator())
+          else if (_loadError != null)
+            ListLoadMessage(message: _loadError!, onRetry: _load)
+          else if (_items.isEmpty)
+            ListLoadMessage(
+              message: _isCustomers
+                  ? '暂无客户 / No customers'
+                  : '暂无供应商 / No suppliers',
+            )
+          else
+            RefreshIndicator(
+              onRefresh: _load,
+              child: ListView.builder(
+                physics: const AlwaysScrollableScrollPhysics(),
+                itemCount: _items.length,
+                itemBuilder: (context, i) {
+                  final item = _items[i];
+                  final id = _idOf(item);
+                  final selected = _selected.contains(id);
+                  late final String title;
+                  late final String subtitle;
+                  if (item is Customer) {
+                    title = item.name;
+                    subtitle =
+                        '${item.phone}${item.notes.isEmpty ? '' : '\n${item.notes}'}';
+                  } else {
+                    final supplier = item as Supplier;
+                    title = supplier.name;
+                    subtitle =
+                        '${supplier.phone}${supplier.email.isEmpty ? '' : '\n${supplier.email}'}';
+                  }
+                  return ListTile(
+                    leading: _selectMode
+                        ? Checkbox(
+                            value: selected,
+                            onChanged: _busy ? null : (_) => _toggle(item),
+                          )
+                        : CircleAvatar(
+                            child: Text(title.isEmpty ? '?' : title[0]),
                           ),
-                        ],
-                      ),
-              );
-            },
-          ),
+                    title: Text(title),
+                    subtitle: Text(subtitle),
+                    selected: selected,
+                    onLongPress: _busy ? null : () => _toggle(item),
+                    onTap: _busy
+                        ? null
+                        : () {
+                            if (_selectMode) {
+                              _toggle(item);
+                            } else {
+                              _edit(item);
+                            }
+                          },
+                    trailing: _selectMode
+                        ? null
+                        : PopupMenuButton<String>(
+                            onSelected: (action) {
+                              if (action == 'edit') _edit(item);
+                              if (action == 'delete') _deleteOne(item);
+                            },
+                            itemBuilder: (_) => const [
+                              PopupMenuItem(
+                                value: 'edit',
+                                child: Text('编辑 / Edit'),
+                              ),
+                              PopupMenuItem(
+                                value: 'delete',
+                                child: Text('删除 / Delete'),
+                              ),
+                            ],
+                          ),
+                  );
+                },
+              ),
+            ),
           if (_busy)
             const Positioned.fill(
               child: IgnorePointer(
