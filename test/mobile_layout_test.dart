@@ -301,22 +301,22 @@ void main() {
       'POS with $count cart items still collapses and expands on a tall phone',
       (tester) async {
         await tester.runAsync(() => repo.upsertProduct(product(0)));
+        final cart = CartState(
+          items: List.generate(count, (_) => CartItem(product: product(0))),
+        );
         await show(
           tester,
-          Scaffold(
-            body: CartScreen(
-              cart: CartState(
-                items: List.generate(
-                  count,
-                  (_) => CartItem(product: product(0)),
-                ),
+          StatefulBuilder(
+            builder: (context, rebuild) => Scaffold(
+              body: CartScreen(
+                cart: cart,
+                user: user,
+                repo: repo,
+                onChanged: () => rebuild(() {}),
+                onCheckout: () {},
+                onHold: () async {},
+                onResume: () async {},
               ),
-              user: user,
-              repo: repo,
-              onChanged: () {},
-              onCheckout: () {},
-              onHold: () async {},
-              onResume: () async {},
             ),
           ),
         );
@@ -330,6 +330,12 @@ void main() {
         expect(tester.getSize(shelf).height, lessThan(before));
         expect(find.text('购物车 ($count)').hitTestable(), findsOneWidget);
         expect(find.text('结账\nCheckout').hitTestable(), findsOneWidget);
+        await tester.tap(
+          find.descendant(of: shelf, matching: find.text('商品000')).first,
+        );
+        await settle(tester);
+        expect(cart.itemCount, count + 1);
+        expect(find.text('购物车 (${count + 1})').hitTestable(), findsOneWidget);
         await tester.drag(
           find.byKey(const PageStorageKey('pos-scroll')),
           const Offset(0, 700),

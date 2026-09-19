@@ -17,3 +17,14 @@ jobs:
           cache: true
       - run: flutter pub get
       - run: flutter test test/mobile_layout_test.dart
+      - uses: actions/checkout@v4
+        with:
+          repository: tyz11234/CNKH_POS_Desktop
+          ref: 47c665de6483f79b5f9ffb3c4c4e3053e82cf364
+          path: .training_desktop
+          sparse-checkout: assets/fonts
+      - run: flutter test tool/training_capture_test.dart
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mobile-layout-screenshots
+          path: assets/training/
