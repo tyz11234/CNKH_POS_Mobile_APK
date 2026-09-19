@@ -1,0 +1,19 @@
+name: Mobile layout regression
+on:
+  push:
+    branches: [fix/mobile-layout-scroll]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  layout:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: flutter test test/mobile_layout_test.dart
