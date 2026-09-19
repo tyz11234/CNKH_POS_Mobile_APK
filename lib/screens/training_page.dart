@@ -29,6 +29,11 @@ class TrainingPage extends StatelessWidget {
         title: Text('${i+1}. ${lessons[i].$1}'),
         childrenPadding: const EdgeInsets.all(16),
         children: [Text(lessons[i].$3, style: const TextStyle(height: 1.6)), const SizedBox(height: 12), TrainingScreenshot(name: lessons[i].$2),
+          if (lessons[i].$2 == 'sale') ...[
+            const SizedBox(height: 12),
+            const Text('向上滑动可收起顶部操作区，商品卡片缩小，购物车显示空间增大；滑回顶部恢复。合计和结账始终在底部。'),
+            const TrainingScreenshot(name: 'sale_compact'),
+          ],
           if (lessons[i].$2 == 'einvoice_setup') ...[
             const SizedBox(height: 12),
             const Text('向下滚动填写凭据，保存后测试连接：'),

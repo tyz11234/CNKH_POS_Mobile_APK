@@ -500,11 +500,14 @@ class _CartScreenState extends State<CartScreen> {
                                     : () => _changeProductPage(-1),
                                 child: const Text('上一页'),
                               ),
-                              Padding(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 12,
+                              Expanded(
+                                child: Center(
+                                  heightFactor: 1,
+                                  child: FittedBox(
+                                    fit: BoxFit.scaleDown,
+                                    child: Text('第 ${_productPage + 1} 页'),
+                                  ),
                                 ),
-                                child: Text('第 ${_productPage + 1} 页'),
                               ),
                               TextButton(
                                 onPressed: _loading || !_productHasNext

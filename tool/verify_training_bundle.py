@@ -11,7 +11,7 @@ parser.add_argument("--kind", choices=("desktop", "mobile"), required=True)
 args = parser.parse_args()
 names = "login sale payment refund stock pair sync backup einvoice_setup einvoice_credentials einvoice_history".split()
 if args.kind == "mobile":
-    names.append("einvoice_status")
+    names.extend(("einvoice_status", "sale_compact", "products_admin", "customers_admin", "suppliers_admin"))
 archive = zipfile.ZipFile(args.bundle) if args.bundle.is_file() else None
 if archive is None:
     if args.kind != "desktop":

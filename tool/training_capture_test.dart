@@ -18,6 +18,8 @@ import 'package:cnkh_pos_mobile/screens/sales_list_screen.dart';
 import 'package:cnkh_pos_mobile/screens/settings_screen.dart';
 import 'package:cnkh_pos_mobile/screens/barcode_scan_screen.dart';
 import 'package:cnkh_pos_mobile/screens/admin/admin_hub.dart';
+import 'package:cnkh_pos_mobile/screens/admin/products_admin.dart';
+import 'package:cnkh_pos_mobile/screens/admin/entities_page.dart';
 import 'package:cnkh_pos_mobile/screens/einvoice_status_screen.dart';
 import 'package:cnkh_pos_mobile/theme/cnkh_theme.dart';
 
@@ -35,6 +37,8 @@ void main() {
     db=AppDatabase.forTesting('${temp.path}/pos.db',seed:true);repo=PosRepository(database:db);
     await repo.auth.initializeAdmin('839201');await repo.auth.login('admin','839201');
     await repo.upsertProduct(product);
+    await repo.upsertCustomer(const Customer(id:'training-customer',name:'培训客户'));
+    await repo.upsertSupplier(const Supplier(id:'training-supplier',name:'培训供应商'));
     await repo.createSale(cart:CartState(items:[CartItem(product:product)]),paymentMethod:'CASH',paidCents:1250,cashier:'admin');
   });
   tearDown(()async{await db.close();await temp.delete(recursive:true);});
@@ -59,10 +63,14 @@ void main() {
       for(var i=0;i<5;i++){await tester.runAsync(()=>Future<void>.delayed(const Duration(milliseconds:200)));await tester.pump(const Duration(milliseconds:200));}
       expect(tester.takeException(),isNull);
     }
-    Future<void> capture(String name, Widget screen, Finder target, {bool history=false, bool scroll=false})async{
+    Future<void> capture(String name, Widget screen, Finder target, {bool history=false, bool scroll=false, bool compact=false})async{
       debugPrint('Training capture: $name');
       await tester.pumpWidget(RepaintBoundary(key:key,child:MaterialApp(debugShowCheckedModeBanner:false,theme:buildCnkhTheme(),home:Scaffold(body:screen))));await settle();
       if(history){await tester.tap(find.text('Submission History'));await tester.pump(const Duration(milliseconds:500));await settle();}
+      if(compact){
+        await tester.drag(find.byKey(const PageStorageKey('pos-scroll')),const Offset(0,-600));
+        await tester.pumpAndSettle();await settle();
+      }
       if(scroll){
         await tester.scrollUntilVisible(target, 500, scrollable: find.byType(Scrollable).first, maxScrolls: 30);
         await settle();
@@ -109,6 +117,10 @@ void main() {
     }
     await capture('login',LoginScreen(repo:repo,onLoggedIn:(_){}),find.byType(TextField));
     await capture('sale',CartScreen(cart:CartState(items:[CartItem(product:product)]),user:user,repo:repo,onChanged:(){},onCheckout:(){},onHold:()async{},onResume:()async{}),find.byType(TextField));
+    await capture('sale_compact',CartScreen(cart:CartState(items:[CartItem(product:product)]),user:user,repo:repo,onChanged:(){},onCheckout:(){},onHold:()async{},onResume:()async{}),find.text('购物车 (1)'),compact:true);
+    await capture('products_admin',ProductsAdminPage(repo:repo,user:user),find.text('培训商品'));
+    await capture('customers_admin',EntitiesPage(repo:repo,kind:'customers'),find.text('培训客户'));
+    await capture('suppliers_admin',EntitiesPage(repo:repo,kind:'suppliers'),find.text('培训供应商'));
     await capture('payment',CheckoutScreen(cart:CartState(items:[CartItem(product:product)]),user:user,repo:repo,qrStorage:QrStorage(),onPaid:(_){},onCancel:(){}),find.byType(TextField));
     await capture('refund',SalesListScreen(repo:repo,todayOnly:true,canVoid:true),find.text('作废'));
     await capture('stock',StocktakePage(repo:repo,user:user),find.byIcon(Icons.edit));
