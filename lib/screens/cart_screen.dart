@@ -638,12 +638,15 @@ class _CartScreenState extends State<CartScreen> {
                         onPressed: cart.items.isEmpty
                             ? null
                             : widget.onCheckout,
-                        child: const Text(
-                          '结账\nCheckout',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            height: 1.15,
-                            fontWeight: FontWeight.w900,
+                        child: const FittedBox(
+                          fit: BoxFit.scaleDown,
+                          child: Text(
+                            '结账\nCheckout',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              height: 1.15,
+                              fontWeight: FontWeight.w900,
+                            ),
                           ),
                         ),
                       ),

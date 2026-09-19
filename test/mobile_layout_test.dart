@@ -14,11 +14,51 @@ import 'package:cnkh_pos_mobile/services/pos_repository.dart';
 import 'package:cnkh_pos_mobile/theme/cnkh_theme.dart';
 import 'package:cnkh_pos_mobile/widgets/paged_list_footer.dart';
 
+class FailableRepository extends PosRepository {
+  FailableRepository(AppDatabase db) : super(database: db);
+  bool fail = false;
+  @override
+  Future<List<Product>> searchProducts(
+    String query, {
+    int limit = 80,
+    int offset = 0,
+    String? category,
+  }) {
+    if (fail) return Future.error(StateError('Test read failure'));
+    return super.searchProducts(
+      query,
+      limit: limit,
+      offset: offset,
+      category: category,
+    );
+  }
+
+  @override
+  Future<List<Customer>> listCustomers({
+    int? limit,
+    int offset = 0,
+    String query = '',
+  }) {
+    if (fail) return Future.error(StateError('Test read failure'));
+    return super.listCustomers(limit: limit, offset: offset, query: query);
+  }
+
+  @override
+  Future<List<Supplier>> listSuppliers({
+    int? limit,
+    int offset = 0,
+    String query = '',
+  }) {
+    if (fail) return Future.error(StateError('Test read failure'));
+    return super.listSuppliers(limit: limit, offset: offset, query: query);
+  }
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   late Directory temp;
   late AppDatabase database;
-  late PosRepository repo;
+  late FailableRepository repo;
   const user = AppUser(
     username: 'admin',
     role: AppRole.admin,
@@ -42,7 +82,7 @@ void main() {
           (_) async => temp.path,
         );
     database = AppDatabase.forTesting('${temp.path}/pos.db', seed: false);
-    repo = PosRepository(database: database);
+    repo = FailableRepository(database);
     await database.db;
   });
   tearDown(() async {
@@ -141,6 +181,53 @@ void main() {
     );
   }
 
+  for (final kind in ['products', 'customers', 'suppliers', 'pos']) {
+    testWidgets('$kind read failure is visible and retry recovers records', (
+      tester,
+    ) async {
+      await tester.runAsync(() async {
+        await repo.upsertProduct(product(0));
+        await repo.upsertCustomer(const Customer(id: 'retry-c', name: '测试客户'));
+        await repo.upsertSupplier(const Supplier(id: 'retry-s', name: '测试供应商'));
+      });
+      repo.fail = true;
+      final Widget screen = kind == 'products'
+          ? ProductsAdminPage(repo: repo, user: user)
+          : kind == 'pos'
+          ? Scaffold(
+              body: CartScreen(
+                cart: CartState(),
+                user: user,
+                repo: repo,
+                onChanged: () {},
+                onCheckout: () {},
+                onHold: () async {},
+                onResume: () async {},
+              ),
+            )
+          : EntitiesPage(repo: repo, kind: kind);
+      await show(tester, screen);
+      expect(find.text('重试 / Retry').hitTestable(), findsOneWidget);
+      repo.fail = false;
+      await tester.tap(find.text('重试 / Retry'));
+      await settle(tester);
+      expect(find.text('重试 / Retry'), findsNothing);
+      expect(
+        find
+            .text(
+              kind == 'customers'
+                  ? '测试客户'
+                  : kind == 'suppliers'
+                  ? '测试供应商'
+                  : '商品000',
+            )
+            .hitTestable(),
+        findsOneWidget,
+      );
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+  }
+
   testWidgets(
     'small screen large type keeps populated body and compact footer',
     (tester) async {
@@ -187,7 +274,7 @@ void main() {
         ),
       );
       final scroll = find.byKey(const PageStorageKey('pos-scroll'));
-      final shelf = find.byType(SliverPersistentHeader);
+      final shelf = find.byKey(const PageStorageKey('pos-products'));
       final before = tester.getSize(shelf).height;
       final checkout = find.widgetWithText(FilledButton, '结账\nCheckout');
       final fixed = tester.getRect(checkout);
