@@ -29,7 +29,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: tyz11234/CNKH_POS_Desktop
-          ref: 47c665de6483f79b5f9ffb3c4c4e3053e82cf364
+          ref: 02e3574b16d45bf0e13f89f5f1d1b42f50bfa3f3
           path: CNKH_POS_Desktop
 
       - name: Record exact paired source SHAs
@@ -38,7 +38,7 @@ jobs:
           set -euo pipefail
           echo "Mobile ref: ${{ github.event.pull_request.head.ref || github.ref_name }}"
           echo "Mobile SHA: $(git -C CNKH_POS_Mobile_APK rev-parse HEAD)"
-          echo "Desktop ref: 47c665de6483f79b5f9ffb3c4c4e3053e82cf364"
+          echo "Desktop ref: 02e3574b16d45bf0e13f89f5f1d1b42f50bfa3f3"
           echo "Desktop SHA: $(git -C CNKH_POS_Desktop rev-parse HEAD)"
 
       - name: Setup Flutter

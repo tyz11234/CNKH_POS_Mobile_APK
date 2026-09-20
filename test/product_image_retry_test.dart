@@ -7,8 +7,13 @@ import 'package:cnkh_pos_mobile/services/pos_repository.dart';
 import 'package:cnkh_pos_mobile/services/lan_sync.dart';
 import 'package:cnkh_pos_mobile/services/product_image_sync_queue.dart';
 
+class ImageSyncTestBinding extends AutomatedTestWidgetsFlutterBinding {
+  @override
+  bool get overrideHttpClient => false;
+}
+
 void main() {
-  TestWidgetsFlutterBinding.ensureInitialized();
+  ImageSyncTestBinding();
   for (final initiallyEnabled in [true, false]) {
     test('image retries survive a new client after cursor advances; enabled=$initiallyEnabled', () async {
       final dir = await Directory.systemTemp.createTemp('cnkh-image-retry-');

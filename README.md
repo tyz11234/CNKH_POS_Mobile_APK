@@ -4,25 +4,36 @@
 
 基于 **Flutter / Dart**，使用本地 SQLite 保存业务数据。核心收银与店内同步不依赖云服务器。
 
-> README 最后更新：**2026-09-19**。`main` 是完整源码与发布分支；`source/main` 仅保留为兼容分支。
+> README 最后更新：**2026-09-20**。`main` 是完整源码与发布分支；`source/main` 仅保留为兼容分支。
 
 ## 当前正式版本
 
 | 项目 | 当前版本 |
 | --- | --- |
-| Mobile | **1.10.1+29 / `v1.10.1-mobile`** |
-| 配套 Desktop | **0.4.0+9 / `v0.4.0`** |
+| Mobile | **1.10.2+30 / `v1.10.2-mobile`** |
+| 配套 Desktop | **0.4.1+10 / `v0.4.1`** |
 | LAN 协议 | `cnkh-sync:v1` |
 | OCR | 本机 Latin + Chinese ML Kit，不使用云 OCR |
 
 ### 下载
 
-- [Android APK](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/download/v1.10.1-mobile/CNKH_POS_Mobile.apk)
-- [版本化 APK（内容相同）](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/download/v1.10.1-mobile/CNKH_POS_Mobile_v1.10.1.apk)
-- [Release 与 SHA-256 校验文件](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/tag/v1.10.1-mobile)
-- [配套电脑版](https://github.com/tyz11234/CNKH_POS_Desktop/releases/tag/v0.4.0)
+- [Android APK](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/download/v1.10.2-mobile/CNKH_POS_Mobile.apk)
+- [版本化 APK（内容相同）](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/download/v1.10.2-mobile/CNKH_POS_Mobile_v1.10.2.apk)
+- [Release 与 SHA-256 校验文件](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/tag/v1.10.2-mobile)
+- [配套电脑版](https://github.com/tyz11234/CNKH_POS_Desktop/releases/tag/v0.4.1)
 
-发布源码由 `v1.10.1-mobile` 标签定位；附件 `SHA256SUMS.txt` 给出本次 APK 校验值。
+发布源码由 `v1.10.2-mobile` 标签定位；附件 `SHA256SUMS.txt` 给出本次 APK 校验值。
+
+## 2026-09-20 结账与数据保护修复
+
+- 保存结账时禁止关闭或重复点击；成功落库后立即处理购物车，即使页面被程序移除也不会依赖旧页面回调才能完成。
+- 找零使用已保存销售的应付和实收金额，避免购物车清空后金额变成零。
+- 取单前请先挂单或清空当前购物车；不再直接覆盖当前商品，连续取单也不会重复消费同一挂单。
+- 进货列表采用紧凑分页栏，恢复有数据列表的可见区域。
+- 商品图片下载独立排队并持久保存在本机；失败后稍后重试，重启仍保留。第一次开启图片功能会补查完整商品目录。
+- 每轮最多处理 4 张图片，失败至少等待 30 秒再尝试；图片失败不回退销售同步。图片很多时会逐批补齐。
+
+保持数据库 schema v9、现有金额算法、离线销售及 LAN 协议不变。修复范围、测试和限制见 [BUGFIX_REPORT.md](BUGFIX_REPORT.md)。
 
 ## 2026-09-19 手机界面修复（1.10.1）
 
