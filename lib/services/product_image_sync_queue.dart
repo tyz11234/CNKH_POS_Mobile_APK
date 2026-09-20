@@ -35,7 +35,7 @@ class ProductImageSyncQueue {
       }
       final old = jobs[id] as Map?;
       jobs[id] = {...job,
-        'after': old?['hasImage'] == job['hasImage'] ? old?['after'] ?? 0 : 0};
+        'after': old != null && old['hasImage'] == job['hasImage'] ? (old['after'] ?? 0) : 0};
     }
     await _write(jobs);
   }
