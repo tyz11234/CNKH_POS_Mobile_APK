@@ -9,6 +9,7 @@ import '../../services/purchase_history_sync.dart';
 import '../../services/purchase_invoice_parser.dart';
 import '../../services/purchase_ocr_repository.dart';
 import '../../widgets/money_text.dart';
+import '../../widgets/paged_list_footer.dart';
 import 'desktop_purchase_history_page.dart';
 import 'purchase_ocr_screen.dart';
 import 'supplier_aliases_page.dart';
@@ -498,24 +499,10 @@ class _EnhancedPurchasesPageState extends State<EnhancedPurchasesPage> {
           ),
         ],
       ),
-      bottomNavigationBar: SafeArea(
-        top: false,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
-          child: Row(
-            children: [
-              OutlinedButton(
-                onPressed: _historyPage == 0 ? null : () => _changeHistoryPage(-1),
-                child: const Text('上一页'),
-              ),
-              Expanded(child: Center(child: Text('第 ${_historyPage + 1} 页'))),
-              OutlinedButton(
-                onPressed: !_historyHasNext ? null : () => _changeHistoryPage(1),
-                child: const Text('下一页'),
-              ),
-            ],
-          ),
-        ),
+      bottomNavigationBar: PagedListFooter(
+        page: _historyPage,
+        onPrevious: _historyPage == 0 ? null : () => _changeHistoryPage(-1),
+        onNext: !_historyHasNext ? null : () => _changeHistoryPage(1),
       ),
       body: Column(
         children: [
