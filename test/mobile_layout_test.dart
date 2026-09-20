@@ -10,6 +10,7 @@ import 'package:cnkh_pos_mobile/models/cart_item.dart';
 import 'package:cnkh_pos_mobile/screens/cart_screen.dart';
 import 'package:cnkh_pos_mobile/screens/admin/products_admin.dart';
 import 'package:cnkh_pos_mobile/screens/admin/entities_page.dart';
+import 'package:cnkh_pos_mobile/screens/admin/enhanced_purchases_page.dart';
 import 'package:cnkh_pos_mobile/services/pos_repository.dart';
 import 'package:cnkh_pos_mobile/theme/cnkh_theme.dart';
 import 'package:cnkh_pos_mobile/widgets/paged_list_footer.dart';
@@ -123,6 +124,29 @@ void main() {
     );
     await settle(tester);
   }
+
+  testWidgets('purchase history stays visible above bottom paging controls', (tester) async {
+    await tester.runAsync(() async {
+      await repo.upsertProduct(product(0));
+      await repo.upsertSupplier(const Supplier(id: 'purchase-supplier', name: 'Supplier'));
+      for (var i = 0; i < 52; i++) {
+        await repo.createPurchase(supplierId: 'purchase-supplier', supplierName: 'Supplier',
+          lines: [{'productId': product(0).id, 'qty': 1, 'unitCostCents': 100}],
+          totalCents: 100, operator: 'admin');
+      }
+    });
+    await show(tester, EnhancedPurchasesPage(repo: repo, user: user));
+    final footer = tester.getRect(find.byType(PagedListFooter));
+    expect(footer.height, lessThan(120));
+    expect(footer.bottom, closeTo(932, 1));
+    expect(find.byType(ListTile).hitTestable(), findsWidgets);
+    expect(tester.getRect(find.byType(ListTile).hitTestable().first).bottom, lessThan(footer.top));
+    await tester.tap(find.text('下一页'));
+    await settle(tester);
+    expect(find.text('第 2 页'), findsOneWidget);
+    expect(find.byType(ListTile).hitTestable(), findsNWidgets(2));
+    await tester.pumpWidget(const SizedBox());
+  });
 
   for (final kind in ['products', 'customers', 'suppliers']) {
     testWidgets(

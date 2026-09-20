@@ -12,6 +12,7 @@ import '../models/product.dart';
 import 'pos_repository.dart';
 import 'sync_store.dart';
 import 'product_images.dart';
+import 'product_image_sync_queue.dart';
 
 const String kPairingPrefix = 'cnkh-sync:v1|';
 
@@ -108,11 +109,12 @@ bool looksLikePairingPayload(String raw) {
 }
 
 class LanSyncClient {
-  LanSyncClient(this.repo, {AppDatabase? database})
-    : _db = database ?? repo.database;
+  LanSyncClient(this.repo, {AppDatabase? database, DateTime Function()? imageClock})
+    : _db = database ?? repo.database, _imageClock = imageClock ?? DateTime.now;
 
   final PosRepository repo;
   final AppDatabase _db;
+  final DateTime Function() _imageClock;
   String? lastError;
   static final Expando<AsyncMutex> _mutexes = Expando<AsyncMutex>();
   AsyncMutex get _mutex => _mutexes[_db] ??= AsyncMutex();
@@ -161,9 +163,25 @@ class LanSyncClient {
         await repo.setSetting('einvoice_status_sync_error', 'e-Invoice 状态同步失败，保留上次结果；销售同步已完成。');
       }
     }
+    await _syncImages(cfg);
     await repo.setSetting('lan_sync_last_error', '');
     return '$a\n$b';
   });
+
+  Future<void> _syncImages(LanSyncConfig cfg) async {
+    if (!await repo.productImagesEnabled()) return;
+    final db = await _db.db;
+    final pending = await ProductImageSyncQueue(db, cfg.normalizedBase, now: _imageClock).drain((job) async {
+      final id = job['localId'] as String;
+      if (job['hasImage'] == true) {
+        await pullProductImage(cfg, pcId: job['remoteId'] as String, localProductId: id);
+      } else {
+        await ProductImageStore().delete(id);
+        await db.update('products', {'image_path': ''}, where: 'id=?', whereArgs: [id]);
+      }
+    });
+    await repo.setSetting('product_image_sync_error', pending == 0 ? '' : '有 $pending 张商品图片待同步，后台将自动重试。');
+  }
 
   Future<void> _pullEInvoiceStatuses(LanSyncConfig cfg) async {
     final rows = <Map<String, dynamic>>[];
@@ -325,7 +343,10 @@ class LanSyncClient {
   Future<String> _pullCatalog(LanSyncConfig cfg) async {
     lastError = null;
     try {
-      final since = await repo.getSetting('lan_sync_products_cursor');
+      final imagesOn = await repo.productImagesEnabled();
+      final imageQueue = ProductImageSyncQueue(await _db.db, cfg.normalizedBase);
+      final seedImages = imagesOn && await imageQueue.needsSeed();
+      final since = seedImages ? '' : await repo.getSetting('lan_sync_products_cursor');
       final q = since.isEmpty
           ? ''
           : '?since=${Uri.encodeQueryComponent(since)}';
@@ -396,38 +417,21 @@ class LanSyncClient {
         for (final raw in suppliers) {
           await _upsertSupplier(txn, Map<String, dynamic>.from(raw as Map));
         }
-      });
-
-      final imagesOn = await repo.productImagesEnabled();
-      if (imagesOn) {
-        final store = ProductImageStore();
+        final imageJobs = <Map<String, dynamic>>[];
         for (final raw in products) {
           final m = Map<String, dynamic>.from(raw as Map);
-          final remoteId = m['pc_id']?.toString().trim() ?? '';
-          if (remoteId.isEmpty) continue;
-          final localId = await mappedLocalId(d, 'product', remoteId);
-          if (localId == null || localId.isEmpty) continue;
-          if (m['has_image'] == true) {
-            try {
-              await pullProductImage(
-                cfg,
-                pcId: remoteId,
-                localProductId: localId,
-              );
-            } catch (_) {}
-          } else {
-            try {
-              await store.delete(localId);
-              await d.update(
-                'products',
-                {'image_path': ''},
-                where: 'id=?',
-                whereArgs: [localId],
-              );
-            } catch (_) {}
-          }
+          final remoteId = m['pc_id']?.toString() ?? '';
+          final localId = await mappedLocalId(txn, 'product', remoteId);
+          if (remoteId.isEmpty || localId == null) continue;
+          final local = await txn.query('products', columns: ['image_path'], where: 'id=?', whereArgs: [localId]);
+          imageJobs.add({'remoteId': remoteId, 'localId': localId,
+            'hasImage': m['has_image'] == true && m['is_deleted'] != 1,
+            'localHasImage': local.isNotEmpty && '${local.first['image_path'] ?? ''}'.isNotEmpty});
         }
-      }
+        final queue = ProductImageSyncQueue(txn, cfg.normalizedBase);
+        await queue.enqueue(imageJobs);
+        if (seedImages) await queue.markSeeded();
+      });
 
       final nextCursor = _safeCatalogCursor(
         since,
@@ -805,24 +809,12 @@ class LanSyncClient {
     );
     final res = await http
         .get(uri, headers: _headers(cfg))
-        .timeout(const Duration(seconds: 20));
-    if (res.statusCode == 404) {
-      final store = ProductImageStore();
-      await store.delete(localProductId);
-      final d = await _db.db;
-      await d.update(
-        'products',
-        {'image_path': ''},
-        where: 'id=?',
-        whereArgs: [localProductId],
-      );
-      return;
-    }
-    if (res.statusCode != 200) return;
+        .timeout(const Duration(seconds: 8));
+    if (res.statusCode != 200) throw StateError('图片下载失败：HTTP ${res.statusCode}');
     final body = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
-    if (body['ok'] != true) return;
+    if (body['ok'] != true) throw StateError('图片响应无效');
     final b64 = body['base64'] as String?;
-    if (b64 == null || b64.isEmpty) return;
+    if (b64 == null || b64.isEmpty) throw StateError('图片内容为空');
     final store = ProductImageStore();
     final saved = await store.saveBase64(
       localProductId,
@@ -837,7 +829,7 @@ class LanSyncClient {
         where: 'id=?',
         whereArgs: [localProductId],
       );
-    }
+    } else { throw StateError('图片保存失败'); }
   }
 
   Future<String> pushCategories(LanSyncConfig cfg) async {
