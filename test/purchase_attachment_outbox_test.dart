@@ -200,10 +200,13 @@ void main() {
       });
 
       final sync = LanSyncClient(repo, database: database);
-      final message = await sync.pushSales(LanSyncConfig(
-        baseUrl: 'http://127.0.0.1:${server.port}',
-        token: 'token',
-      ));
+      final message = await HttpOverrides.runZoned(
+        () => sync.pushSales(LanSyncConfig(
+          baseUrl: 'http://127.0.0.1:${server.port}',
+          token: 'token',
+        )),
+        createHttpClient: (_) => HttpClient(),
+      );
 
       expect(attachmentAttempts, 1);
       expect(saleUploads, 1);
