@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:cnkh_pos_mobile/db/app_database.dart';
+import 'package:cnkh_pos_mobile/db/ocr_purchase_schema.dart';
 import 'package:cnkh_pos_mobile/models/product.dart';
 import 'package:cnkh_pos_mobile/services/pos_repository.dart';
 import 'package:cnkh_pos_mobile/services/purchase_history_sync.dart';
@@ -163,10 +164,29 @@ void main() {
       expect((await repo.getProduct('local-p1'))!.stock, 10);
       expect(await db.query('stock_moves'), isEmpty);
 
-      // Explicit reconciliation must ignore the saved incremental cursor.
+      await ensureOcrPurchaseSchema(db);
+      await db.insert('purchase_attachments', <String, Object?>{
+        'id': 'local-original-attachment',
+        'purchase_id': localPurchaseId,
+        'local_path': 'local-invoice-original.jpg',
+        'kind': 'invoice_original',
+        'sync_status': 'pending',
+        'created_at': '2026-09-06T12:01:00.000Z',
+      });
+
+      // Explicit reconciliation must ignore the saved cursor without replacing
+      // the parent purchase row or cascading its local attachment away.
       final full = await sync.pullFromSavedDesktop(full: true);
       expect(full.changed, 1);
       expect(await db.query('purchases'), hasLength(1));
+      final attachments = await db.query(
+        'purchase_attachments',
+        where: 'purchase_id=?',
+        whereArgs: <Object?>[localPurchaseId],
+      );
+      expect(attachments, hasLength(1));
+      expect(attachments.single['local_path'], 'local-invoice-original.jpg');
+      expect(attachments.single['sync_status'], 'pending');
       expect((await repo.getProduct('local-p1'))!.stock, 10);
       expect(await db.query('stock_moves'), isEmpty);
 
