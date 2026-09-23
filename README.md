@@ -15,16 +15,17 @@
 | LAN 协议 | `cnkh-sync:v1` |
 | OCR | 本机 Latin + Chinese ML Kit，不使用云 OCR |
 
-下方下载链接仍指向目前已发布的 Mobile 1.10.2 和 Desktop 0.4.1 安装包。1.10.3+31 源码推送后须等 CI 验证；本次不会自动发布安装包。
+Mobile 与配套 Desktop **1.10.3+31** 已正式发布，APK、Windows ZIP 均已通过 CI 构建，双端联调已通过。下方链接提供当前版本安装包及 SHA-256 校验文件。
 
 ### 下载
 
-- [Android APK](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/download/v1.10.2-mobile/CNKH_POS_Mobile.apk)
-- [版本化 APK（内容相同）](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/download/v1.10.2-mobile/CNKH_POS_Mobile_v1.10.2.apk)
-- [Release 与 SHA-256 校验文件](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/tag/v1.10.2-mobile)
-- [配套电脑版](https://github.com/tyz11234/CNKH_POS_Desktop/releases/tag/v0.4.1)
+- [Android APK（1.10.3+31）](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/download/v1.10.3-mobile/CNKH_POS_Mobile.apk)
+- [版本化 APK（内容相同）](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/download/v1.10.3-mobile/CNKH_POS_Mobile_v1.10.3.apk)
+- [Mobile SHA-256 校验文件](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/download/v1.10.3-mobile/SHA256SUMS.txt)
+- [Mobile Release](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/tag/v1.10.3-mobile)
+- [配套 Windows x64 便携包（1.10.3+31）](https://github.com/tyz11234/CNKH_POS_Desktop/releases/download/v1.10.3/CNKH_POS_Desktop-windows-x64-v1.10.3-31.zip)
 
-发布源码由 `v1.10.2-mobile` 标签定位；附件 `SHA256SUMS.txt` 给出本次 APK 校验值。
+发布源码由 `v1.10.3-mobile` 标签定位；附件 `SHA256SUMS.txt` 给出本次 APK 校验值。APK 沿用项目当前的 debug 签名配置；若 Android 提示签名不一致，请先完成数据同步和备份，再考虑卸载重装。
 
 ## 2026-09-20 结账与数据保护修复
 
