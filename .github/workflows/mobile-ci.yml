@@ -72,7 +72,6 @@ jobs:
         run: flutter test tool/training_view_test.dart
 
       - name: Configure Android release signing
-        if: github.event_name != 'pull_request'
         env:
           CNKH_ANDROID_KEYSTORE_BASE64: ${{ secrets.CNKH_ANDROID_KEYSTORE_BASE64 }}
           CNKH_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.CNKH_ANDROID_KEYSTORE_PASSWORD }}
@@ -81,33 +80,45 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [[ -z "$CNKH_ANDROID_KEYSTORE_BASE64" ||
-                -z "$CNKH_ANDROID_KEYSTORE_PASSWORD" ||
-                -z "$CNKH_ANDROID_KEY_ALIAS" ||
-                -z "$CNKH_ANDROID_KEY_PASSWORD" ]]; then
-            echo '::error::Android release signing secrets are required to build an APK.'
-            exit 1
+          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
+            key_path="$RUNNER_TEMP/cnkh-pr-validation.jks"
+            store_password="pr-validation-only"
+            key_alias="pr-validation"
+            key_password="$store_password"
+            keytool -genkeypair -noprompt \
+              -keystore "$key_path" -storetype JKS \
+              -storepass "$store_password" -keypass "$key_password" \
+              -alias "$key_alias" -keyalg RSA -keysize 2048 -validity 2 \
+              -dname "CN=CNKH PR validation, O=CNKH, C=MY"
+          else
+            if [[ -z "$CNKH_ANDROID_KEYSTORE_BASE64" ||
+                  -z "$CNKH_ANDROID_KEYSTORE_PASSWORD" ||
+                  -z "$CNKH_ANDROID_KEY_ALIAS" ||
+                  -z "$CNKH_ANDROID_KEY_PASSWORD" ]]; then
+              echo '::error::Android release signing secrets are required to build an APK.'
+              exit 1
+            fi
+            key_path="$RUNNER_TEMP/cnkh-pos-release.jks"
+            store_password="$CNKH_ANDROID_KEYSTORE_PASSWORD"
+            key_alias="$CNKH_ANDROID_KEY_ALIAS"
+            key_password="$CNKH_ANDROID_KEY_PASSWORD"
+            printf '%s' "$CNKH_ANDROID_KEYSTORE_BASE64" | base64 --decode > "$key_path"
+            test -s "$key_path"
           fi
-          key_path="$RUNNER_TEMP/cnkh-pos-release.jks"
-          printf '%s' "$CNKH_ANDROID_KEYSTORE_BASE64" | base64 --decode > "$key_path"
-          test -s "$key_path"
           {
             echo "CNKH_ANDROID_KEYSTORE_PATH=$key_path"
-            echo "CNKH_ANDROID_KEYSTORE_PASSWORD=$CNKH_ANDROID_KEYSTORE_PASSWORD"
-            echo "CNKH_ANDROID_KEY_ALIAS=$CNKH_ANDROID_KEY_ALIAS"
-            echo "CNKH_ANDROID_KEY_PASSWORD=$CNKH_ANDROID_KEY_PASSWORD"
+            echo "CNKH_ANDROID_KEYSTORE_PASSWORD=$store_password"
+            echo "CNKH_ANDROID_KEY_ALIAS=$key_alias"
+            echo "CNKH_ANDROID_KEY_PASSWORD=$key_password"
           } >> "$GITHUB_ENV"
 
       - name: Build Android release APK
-        if: github.event_name != 'pull_request'
         run: flutter build apk --release
 
       - name: Verify training assets in APK
-        if: github.event_name != 'pull_request'
         run: python3 tool/verify_training_bundle.py build/app/outputs/flutter-apk/app-release.apk --kind mobile
 
       - name: Verify Release INTERNET permission and identity
-        if: github.event_name != 'pull_request'
         shell: bash
         run: |
           set -euo pipefail
