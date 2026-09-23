@@ -71,13 +71,43 @@ jobs:
       - name: Verify bundled training image and arrow
         run: flutter test tool/training_view_test.dart
 
+      - name: Configure Android release signing
+        if: github.event_name != 'pull_request'
+        env:
+          CNKH_ANDROID_KEYSTORE_BASE64: ${{ secrets.CNKH_ANDROID_KEYSTORE_BASE64 }}
+          CNKH_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.CNKH_ANDROID_KEYSTORE_PASSWORD }}
+          CNKH_ANDROID_KEY_ALIAS: ${{ secrets.CNKH_ANDROID_KEY_ALIAS }}
+          CNKH_ANDROID_KEY_PASSWORD: ${{ secrets.CNKH_ANDROID_KEY_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "$CNKH_ANDROID_KEYSTORE_BASE64" ||
+                -z "$CNKH_ANDROID_KEYSTORE_PASSWORD" ||
+                -z "$CNKH_ANDROID_KEY_ALIAS" ||
+                -z "$CNKH_ANDROID_KEY_PASSWORD" ]]; then
+            echo '::error::Android release signing secrets are required to build an APK.'
+            exit 1
+          fi
+          key_path="$RUNNER_TEMP/cnkh-pos-release.jks"
+          printf '%s' "$CNKH_ANDROID_KEYSTORE_BASE64" | base64 --decode > "$key_path"
+          test -s "$key_path"
+          {
+            echo "CNKH_ANDROID_KEYSTORE_PATH=$key_path"
+            echo "CNKH_ANDROID_KEYSTORE_PASSWORD=$CNKH_ANDROID_KEYSTORE_PASSWORD"
+            echo "CNKH_ANDROID_KEY_ALIAS=$CNKH_ANDROID_KEY_ALIAS"
+            echo "CNKH_ANDROID_KEY_PASSWORD=$CNKH_ANDROID_KEY_PASSWORD"
+          } >> "$GITHUB_ENV"
+
       - name: Build Android release APK
+        if: github.event_name != 'pull_request'
         run: flutter build apk --release
 
       - name: Verify training assets in APK
+        if: github.event_name != 'pull_request'
         run: python3 tool/verify_training_bundle.py build/app/outputs/flutter-apk/app-release.apk --kind mobile
 
       - name: Verify Release INTERNET permission and identity
+        if: github.event_name != 'pull_request'
         shell: bash
         run: |
           set -euo pipefail
@@ -106,9 +136,21 @@ jobs:
           echo "Permission tool: $tool"
           "$tool" dump permissions "$apk" | tee /tmp/apk-permissions.txt
           grep -q 'android.permission.INTERNET' /tmp/apk-permissions.txt
+
+          signer=$(find "$sdk_root/build-tools" -type f -name apksigner 2>/dev/null | sort -V | tail -n 1 || true)
+          if [ -z "$signer" ]; then
+            echo 'apksigner not found in Android SDK build-tools' >&2
+            exit 1
+          fi
+          "$signer" verify --print-certs "$apk" | tee /tmp/apk-signing-cert.txt
+          if grep -qi 'CN=Android Debug' /tmp/apk-signing-cert.txt; then
+            echo 'Release APK must not use the Android debug certificate' >&2
+            exit 1
+          fi
           sha256sum "$apk" | tee /tmp/app-release.sha256
 
       - name: Stage APKs
+        if: github.event_name != 'pull_request'
         shell: bash
         run: |
           set -euo pipefail
@@ -125,6 +167,7 @@ jobs:
           cat dist/SHA256SUMS.txt
 
       - name: Upload APK artifact
+        if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@v4
         with:
           name: CNKH_POS_Mobile_release
