@@ -2,7 +2,7 @@ name: cnkh_pos_mobile
 description: "CNKH Hardware POS Mobile companion — phone-first staff checkout with DuitNow QR."
 publish_to: 'none'
 
-version: 1.10.2+30
+version: 1.10.3+31
 
 environment:
   sdk: ^3.9.0
