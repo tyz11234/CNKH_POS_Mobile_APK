@@ -121,8 +121,10 @@ class LanSyncClient {
   Future<String> pullCatalog(LanSyncConfig cfg) => synchronize(cfg);
   Future<String> pullSales(LanSyncConfig cfg) => synchronize(cfg);
   Future<String> pushSales(LanSyncConfig cfg) => _mutex.run(() async {
-    await _drainPending(cfg);
-    return '待同步操作已上传';
+    final deferredError = await _drainPending(cfg);
+    return deferredError == null
+        ? '待同步操作已上传'
+        : '销售已上传；进货发票原图仍待重试';
   });
   Future<String> synchronize(
     LanSyncConfig cfg, {
@@ -143,7 +145,7 @@ class LanSyncClient {
         !(h['capabilities'] as List? ?? []).contains('mutations_v1')) {
       throw StateError('请先更新电脑端，手机待同步数据已保留');
     }
-    await _drainPending(cfg);
+    final deferredAttachmentError = await _drainPending(cfg);
     final cursor = (h['cursor'] as num?)?.toInt();
     for (final key in ['lan_sync_products_cursor', 'lan_sync_sales_cursor']) {
       if (full ||
@@ -164,8 +166,11 @@ class LanSyncClient {
       }
     }
     await _syncImages(cfg);
-    await repo.setSetting('lan_sync_last_error', '');
-    return '$a\n$b';
+    lastError = deferredAttachmentError;
+    await repo.setSetting('lan_sync_last_error', deferredAttachmentError ?? '');
+    return deferredAttachmentError == null
+        ? '$a\n$b'
+        : '$a\n$b\n进货发票原图待重试，其他同步已继续';
   });
 
   Future<void> _syncImages(LanSyncConfig cfg) async {
@@ -201,8 +206,10 @@ class LanSyncClient {
     await EInvoiceStatusStore(await _db.db).replaceSnapshot(cfg.normalizedBase, rows);
   }
 
-  Future<void> _drainPending(LanSyncConfig cfg) async {
+  Future<String?> _drainPending(LanSyncConfig cfg) async {
     final d = await _db.db;
+    final deferredAttachmentIds = <String>{};
+    String? deferredAttachmentError;
     while ((Sqflite.firstIntValue(
               await d.rawQuery(
                 "SELECT COUNT(*) FROM sales s WHERE (s.synced_at IS NULL OR s.synced_at='') AND NOT EXISTS (SELECT 1 FROM sync_outbox o WHERE o.kind='sale_upload' AND o.entity_id=s.id)",
@@ -213,9 +220,16 @@ class LanSyncClient {
       await _pushSales(cfg, legacyOnly: true);
     }
     while (true) {
-      final rows = await d.query('sync_outbox', orderBy: 'seq ASC', limit: 1);
-      if (rows.isEmpty) break;
-      final op = rows.first;
+      final rows = await d.query('sync_outbox', orderBy: 'seq ASC');
+      Map<String, Object?>? op;
+      for (final row in rows) {
+        if (!deferredAttachmentIds.contains(row['id']?.toString() ?? '')) {
+          op = row;
+          break;
+        }
+      }
+      if (op == null) break;
+      final operationId = op['id']?.toString() ?? '';
       try {
         if (op['kind'] == 'sale_upload') {
           await _pushSales(
@@ -255,10 +269,20 @@ class LanSyncClient {
           whereArgs: [op['id']],
         );
         lastError = '$e';
+        if (op['kind'] == 'purchase_attachment') {
+          deferredAttachmentIds.add(operationId);
+          deferredAttachmentError ??= '$e';
+          continue;
+        }
         await repo.setSetting('lan_sync_last_error', '$e');
         rethrow;
       }
     }
+    if (deferredAttachmentError != null) {
+      lastError = deferredAttachmentError;
+      await repo.setSetting('lan_sync_last_error', deferredAttachmentError);
+    }
+    return deferredAttachmentError;
   }
 
   // A cancelled upload has no net inventory effect. It can be sent in its
