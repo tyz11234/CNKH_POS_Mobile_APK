@@ -72,6 +72,7 @@ jobs:
         run: flutter test tool/training_view_test.dart
 
       - name: Configure Android release signing
+        if: github.event_name == 'pull_request' || startsWith(github.ref, 'refs/tags/') || (github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[release]'))
         env:
           CNKH_ANDROID_KEYSTORE_BASE64: ${{ secrets.CNKH_ANDROID_KEYSTORE_BASE64 }}
           CNKH_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.CNKH_ANDROID_KEYSTORE_PASSWORD }}
@@ -113,12 +114,15 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Build Android release APK
+        if: github.event_name == 'pull_request' || startsWith(github.ref, 'refs/tags/') || (github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[release]'))
         run: flutter build apk --release
 
       - name: Verify training assets in APK
+        if: github.event_name == 'pull_request' || startsWith(github.ref, 'refs/tags/') || (github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[release]'))
         run: python3 tool/verify_training_bundle.py build/app/outputs/flutter-apk/app-release.apk --kind mobile
 
       - name: Verify Release INTERNET permission and identity
+        if: github.event_name == 'pull_request' || startsWith(github.ref, 'refs/tags/') || (github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[release]'))
         shell: bash
         run: |
           set -euo pipefail
@@ -161,7 +165,7 @@ jobs:
           sha256sum "$apk" | tee /tmp/app-release.sha256
 
       - name: Stage APKs
-        if: github.event_name != 'pull_request'
+        if: startsWith(github.ref, 'refs/tags/') || (github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[release]'))
         shell: bash
         run: |
           set -euo pipefail
@@ -178,7 +182,7 @@ jobs:
           cat dist/SHA256SUMS.txt
 
       - name: Upload APK artifact
-        if: github.event_name != 'pull_request'
+        if: startsWith(github.ref, 'refs/tags/') || (github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[release]'))
         uses: actions/upload-artifact@v4
         with:
           name: CNKH_POS_Mobile_release
