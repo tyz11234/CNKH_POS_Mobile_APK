@@ -3,6 +3,8 @@ import 'dart:io';
 
 import 'package:cnkh_pos_mobile/db/app_database.dart';
 import 'package:cnkh_pos_mobile/db/ocr_purchase_schema.dart';
+import 'package:cnkh_pos_mobile/services/lan_sync.dart';
+import 'package:cnkh_pos_mobile/services/pos_repository.dart';
 import 'package:cnkh_pos_mobile/services/sync_store.dart';
 import 'package:cryptography/cryptography.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -116,4 +118,116 @@ void main() {
       await temp.delete(recursive: true);
     }
   });
+  test('a failed invoice attachment does not block queued sale uploads', () async {
+    final temp = await Directory.systemTemp.createTemp('cnkh-attachment-retry-');
+    final database = AppDatabase.forTesting('${temp.path}/pos.db', seed: false);
+    final repo = PosRepository(database: database);
+    HttpServer? server;
+    var attachmentAttempts = 0;
+    var saleUploads = 0;
+    try {
+      final db = await database.db;
+      await ensureOcrPurchaseSchema(db);
+      await db.insert(
+        'settings',
+        {'key': 'lan_sync_host', 'value': 'http://127.0.0.1:8787'},
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+      final original = File('${temp.path}/invoice-original.jpg');
+      await original.writeAsBytes(List<int>.generate(32, (i) => i));
+      await db.insert('purchase_drafts', {
+        'id': 'draft-blocker',
+        'original_image_path': original.path,
+        'created_at': '2026-09-06T10:00:00Z',
+        'created_by': 'staff',
+      });
+      await queueMutation(db, 'purchase', 'purchase-blocker', {
+        'id': 'purchase-blocker',
+        'source': 'ocr',
+        'draft_id': 'draft-blocker',
+      });
+      await db.insert('sales', {
+        'id': 'sale-after-attachment',
+        'receipt_no': 'M-SALE-1',
+        'sold_at': '2026-09-06T10:01:00Z',
+        'cashier': 'staff',
+        'payment_method': 'cash',
+        'subtotal_cents': 100,
+        'total_cents': 100,
+        'paid_cents': 100,
+        'lines_json': '[]',
+      });
+      await queueMutation(db, 'sale_upload', 'sale-after-attachment', {
+        'id': 'sale-after-attachment',
+      });
+
+      server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      server.listen((request) async {
+        request.response.headers.contentType = ContentType.json;
+        final path = request.uri.path;
+        final body = jsonDecode(await utf8.decoder.bind(request).join())
+            as Map<String, dynamic>;
+        if (path == '/api/v1/mutations') {
+          final op = (body['operations'] as List).single as Map;
+          if (op['kind'] == 'purchase_attachment') {
+            attachmentAttempts++;
+            request.response.write(jsonEncode({
+              'ok': false,
+              'error': 'simulated attachment failure',
+              'acknowledged': <String>[],
+            }));
+          } else {
+            request.response.write(jsonEncode({
+              'ok': true,
+              'acknowledged': [op['id']],
+            }));
+          }
+        } else if (path == '/api/v1/sales') {
+          saleUploads++;
+          final sale = (body['sales'] as List).single as Map;
+          request.response.write(jsonEncode({
+            'ok': true,
+            'receipts': [{
+              'client_sale_id': sale['client_sale_id'],
+              'receipt_no': sale['receipt_no'],
+            }],
+          }));
+        } else {
+          request.response.statusCode = HttpStatus.notFound;
+          request.response.write(jsonEncode({'ok': false}));
+        }
+        await request.response.close();
+      });
+
+      final sync = LanSyncClient(repo, database: database);
+      final message = await sync.pushSales(LanSyncConfig(
+        baseUrl: 'http://127.0.0.1:${server.port}',
+        token: 'token',
+      ));
+
+      expect(attachmentAttempts, 1);
+      expect(saleUploads, 1);
+      expect(message, contains('仍待重试'));
+      final remaining = await db.query('sync_outbox', orderBy: 'seq ASC');
+      expect(remaining, hasLength(1));
+      expect(remaining.single['kind'], 'purchase_attachment');
+      expect(remaining.single['last_error'], contains('simulated attachment failure'));
+      expect(await repo.getSetting('lan_sync_last_error'),
+          contains('simulated attachment failure'));
+      expect(
+        (await db.query(
+          'sales',
+          where: 'id=?',
+          whereArgs: ['sale-after-attachment'],
+        ))
+            .single['synced_at'],
+        isNotNull,
+      );
+    } finally {
+      await server?.close(force: true);
+      await database.close();
+      await temp.delete(recursive: true);
+    }
+  });
+
 }
