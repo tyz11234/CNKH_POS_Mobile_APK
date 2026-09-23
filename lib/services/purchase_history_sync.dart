@@ -204,11 +204,17 @@ class PurchaseHistorySync {
           'reversal_notes': remote['reversal_notes']?.toString() ?? '',
         };
 
-        await txn.insert(
-          'purchases',
-          row,
-          conflictAlgorithm: ConflictAlgorithm.replace,
-        );
+        if (existing == null) {
+          await txn.insert('purchases', row);
+        } else {
+          final updates = Map<String, Object?>.from(row)..remove('id');
+          await txn.update(
+            'purchases',
+            updates,
+            where: 'id=?',
+            whereArgs: <Object?>[localId],
+          );
+        }
         final draftId = row['draft_id']?.toString() ?? '';
         if (draftId.isNotEmpty) {
           await txn.insert(
