@@ -8,6 +8,8 @@ import 'package:cnkh_pos_mobile/services/pos_repository.dart';
 import 'package:cnkh_pos_mobile/services/sync_store.dart';
 import 'package:cryptography/cryptography.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 String hex(List<int> bytes) =>
@@ -122,9 +124,52 @@ void main() {
     final temp = await Directory.systemTemp.createTemp('cnkh-attachment-retry-');
     final database = AppDatabase.forTesting('${temp.path}/pos.db', seed: false);
     final repo = PosRepository(database: database);
-    HttpServer? server;
     var attachmentAttempts = 0;
     var saleUploads = 0;
+    final mockClient = MockClient((request) async {
+      final path = request.url.path;
+      final body = jsonDecode(request.body) as Map<String, dynamic>;
+      if (path == '/api/v1/mutations') {
+        final op = (body['operations'] as List).single as Map;
+        if (op['kind'] == 'purchase_attachment') {
+          attachmentAttempts++;
+          return http.Response(
+            jsonEncode({
+              'ok': false,
+              'error': 'simulated attachment failure',
+              'acknowledged': <String>[],
+            }),
+            HttpStatus.ok,
+            headers: {'content-type': 'application/json'},
+          );
+        }
+        return http.Response(
+          jsonEncode({'ok': true, 'acknowledged': [op['id']]}),
+          HttpStatus.ok,
+          headers: {'content-type': 'application/json'},
+        );
+      }
+      if (path == '/api/v1/sales') {
+        saleUploads++;
+        final sale = (body['sales'] as List).single as Map;
+        return http.Response(
+          jsonEncode({
+            'ok': true,
+            'receipts': [{
+              'client_sale_id': sale['client_sale_id'],
+              'receipt_no': sale['receipt_no'],
+            }],
+          }),
+          HttpStatus.ok,
+          headers: {'content-type': 'application/json'},
+        );
+      }
+      return http.Response(
+        jsonEncode({'ok': false}),
+        HttpStatus.notFound,
+        headers: {'content-type': 'application/json'},
+      );
+    });
     try {
       final db = await database.db;
       await ensureOcrPurchaseSchema(db);
@@ -161,52 +206,15 @@ void main() {
         'id': 'sale-after-attachment',
       });
 
-      server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
-      server.listen((request) async {
-        request.response.headers.contentType = ContentType.json;
-        final path = request.uri.path;
-        final body = jsonDecode(await utf8.decoder.bind(request).join())
-            as Map<String, dynamic>;
-        if (path == '/api/v1/mutations') {
-          final op = (body['operations'] as List).single as Map;
-          if (op['kind'] == 'purchase_attachment') {
-            attachmentAttempts++;
-            request.response.write(jsonEncode({
-              'ok': false,
-              'error': 'simulated attachment failure',
-              'acknowledged': <String>[],
-            }));
-          } else {
-            request.response.write(jsonEncode({
-              'ok': true,
-              'acknowledged': [op['id']],
-            }));
-          }
-        } else if (path == '/api/v1/sales') {
-          saleUploads++;
-          final sale = (body['sales'] as List).single as Map;
-          request.response.write(jsonEncode({
-            'ok': true,
-            'receipts': [{
-              'client_sale_id': sale['client_sale_id'],
-              'receipt_no': sale['receipt_no'],
-            }],
-          }));
-        } else {
-          request.response.statusCode = HttpStatus.notFound;
-          request.response.write(jsonEncode({'ok': false}));
-        }
-        await request.response.close();
-      });
-
-      final sync = LanSyncClient(repo, database: database);
-      final message = await HttpOverrides.runZoned(
-        () => sync.pushSales(LanSyncConfig(
-          baseUrl: 'http://127.0.0.1:${server!.port}',
-          token: 'token',
-        )),
-        createHttpClient: (_) => HttpClient(),
+      final sync = LanSyncClient(
+        repo,
+        database: database,
+        httpClient: mockClient,
       );
+      final message = await sync.pushSales(LanSyncConfig(
+        baseUrl: 'http://127.0.0.1:8787',
+        token: 'token',
+      ));
 
       expect(attachmentAttempts, 1);
       expect(saleUploads, 1);
@@ -227,7 +235,7 @@ void main() {
         isNotNull,
       );
     } finally {
-      await server?.close(force: true);
+      mockClient.close();
       await database.close();
       await temp.delete(recursive: true);
     }
