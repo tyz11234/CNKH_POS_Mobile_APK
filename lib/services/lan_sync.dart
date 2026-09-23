@@ -109,20 +109,31 @@ bool looksLikePairingPayload(String raw) {
 }
 
 class LanSyncClient {
-  LanSyncClient(this.repo, {AppDatabase? database, DateTime Function()? imageClock})
-    : _db = database ?? repo.database, _imageClock = imageClock ?? DateTime.now;
+  LanSyncClient(
+    this.repo, {
+    AppDatabase? database,
+    DateTime Function()? imageClock,
+    http.Client? httpClient,
+  }) : _db = database ?? repo.database,
+       _imageClock = imageClock ?? DateTime.now,
+       _injectedHttpClient = httpClient;
 
+  static final http.Client _defaultHttpClient = http.Client();
   final PosRepository repo;
   final AppDatabase _db;
   final DateTime Function() _imageClock;
+  final http.Client? _injectedHttpClient;
+  http.Client get _requestClient => _injectedHttpClient ?? _defaultHttpClient;
   String? lastError;
   static final Expando<AsyncMutex> _mutexes = Expando<AsyncMutex>();
   AsyncMutex get _mutex => _mutexes[_db] ??= AsyncMutex();
   Future<String> pullCatalog(LanSyncConfig cfg) => synchronize(cfg);
   Future<String> pullSales(LanSyncConfig cfg) => synchronize(cfg);
   Future<String> pushSales(LanSyncConfig cfg) => _mutex.run(() async {
-    await _drainPending(cfg);
-    return '待同步操作已上传';
+    final deferredError = await _drainPending(cfg);
+    return deferredError == null
+        ? '待同步操作已上传'
+        : '销售已上传；进货发票原图仍待重试';
   });
   Future<String> synchronize(
     LanSyncConfig cfg, {
@@ -143,7 +154,7 @@ class LanSyncClient {
         !(h['capabilities'] as List? ?? []).contains('mutations_v1')) {
       throw StateError('请先更新电脑端，手机待同步数据已保留');
     }
-    await _drainPending(cfg);
+    final deferredAttachmentError = await _drainPending(cfg);
     final cursor = (h['cursor'] as num?)?.toInt();
     for (final key in ['lan_sync_products_cursor', 'lan_sync_sales_cursor']) {
       if (full ||
@@ -164,8 +175,11 @@ class LanSyncClient {
       }
     }
     await _syncImages(cfg);
-    await repo.setSetting('lan_sync_last_error', '');
-    return '$a\n$b';
+    lastError = deferredAttachmentError;
+    await repo.setSetting('lan_sync_last_error', deferredAttachmentError ?? '');
+    return deferredAttachmentError == null
+        ? '$a\n$b'
+        : '$a\n$b\n进货发票原图待重试，其他同步已继续';
   });
 
   Future<void> _syncImages(LanSyncConfig cfg) async {
@@ -188,7 +202,7 @@ class LanSyncClient {
     var after = '';
     while (true) {
       final uri = Uri.parse('${cfg.normalizedBase}/api/v1/einvoices').replace(queryParameters: {'after': after});
-      final response = await http.get(uri, headers: _headers(cfg)).timeout(const Duration(seconds: 20));
+      final response = await _requestClient.get(uri, headers: _headers(cfg)).timeout(const Duration(seconds: 20));
       if (response.statusCode != 200) throw StateError('Status sync failed');
       final data = jsonDecode(response.body) as Map<String, dynamic>;
       final items = data['items'] as List;
@@ -201,8 +215,10 @@ class LanSyncClient {
     await EInvoiceStatusStore(await _db.db).replaceSnapshot(cfg.normalizedBase, rows);
   }
 
-  Future<void> _drainPending(LanSyncConfig cfg) async {
+  Future<String?> _drainPending(LanSyncConfig cfg) async {
     final d = await _db.db;
+    final deferredAttachmentIds = <String>{};
+    String? deferredAttachmentError;
     while ((Sqflite.firstIntValue(
               await d.rawQuery(
                 "SELECT COUNT(*) FROM sales s WHERE (s.synced_at IS NULL OR s.synced_at='') AND NOT EXISTS (SELECT 1 FROM sync_outbox o WHERE o.kind='sale_upload' AND o.entity_id=s.id)",
@@ -213,9 +229,16 @@ class LanSyncClient {
       await _pushSales(cfg, legacyOnly: true);
     }
     while (true) {
-      final rows = await d.query('sync_outbox', orderBy: 'seq ASC', limit: 1);
-      if (rows.isEmpty) break;
-      final op = rows.first;
+      final rows = await d.query('sync_outbox', orderBy: 'seq ASC');
+      Map<String, Object?>? op;
+      for (final row in rows) {
+        if (!deferredAttachmentIds.contains(row['id']?.toString() ?? '')) {
+          op = row;
+          break;
+        }
+      }
+      if (op == null) break;
+      final operationId = op['id']?.toString() ?? '';
       try {
         if (op['kind'] == 'sale_upload') {
           await _pushSales(
@@ -224,8 +247,7 @@ class LanSyncClient {
             originalState: !await _canUploadCancelledSale(d, op),
           );
         } else {
-          final res = await http
-              .post(
+          final res = await _requestClient.post(
                 Uri.parse('${cfg.normalizedBase}/api/v1/mutations'),
                 headers: _headers(cfg),
                 body: jsonEncode({
@@ -255,10 +277,20 @@ class LanSyncClient {
           whereArgs: [op['id']],
         );
         lastError = '$e';
+        if (op['kind'] == 'purchase_attachment') {
+          deferredAttachmentIds.add(operationId);
+          deferredAttachmentError ??= '$e';
+          continue;
+        }
         await repo.setSetting('lan_sync_last_error', '$e');
         rethrow;
       }
     }
+    if (deferredAttachmentError != null) {
+      lastError = deferredAttachmentError;
+      await repo.setSetting('lan_sync_last_error', deferredAttachmentError);
+    }
+    return deferredAttachmentError;
   }
 
   // A cancelled upload has no net inventory effect. It can be sent in its
@@ -292,8 +324,7 @@ class LanSyncClient {
 
   Future<Map<String, dynamic>> health(LanSyncConfig cfg) async {
     final uri = Uri.parse('${cfg.normalizedBase}/api/v1/health');
-    final res = await http
-        .get(uri, headers: _headers(cfg))
+    final res = await _requestClient.get(uri, headers: _headers(cfg))
         .timeout(const Duration(seconds: 5));
     final body = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
     if (res.statusCode < 200 || res.statusCode >= 300) {
@@ -356,17 +387,13 @@ class LanSyncClient {
       final categoriesUri = Uri.parse('${cfg.normalizedBase}/api/v1/categories$q');
 
       final responses = await Future.wait<http.Response>([
-        http
-            .get(productsUri, headers: _headers(cfg))
+        _requestClient.get(productsUri, headers: _headers(cfg))
             .timeout(const Duration(seconds: 30)),
-        http
-            .get(customersUri, headers: _headers(cfg))
+        _requestClient.get(customersUri, headers: _headers(cfg))
             .timeout(const Duration(seconds: 30)),
-        http
-            .get(suppliersUri, headers: _headers(cfg))
+        _requestClient.get(suppliersUri, headers: _headers(cfg))
             .timeout(const Duration(seconds: 30)),
-        http
-            .get(categoriesUri, headers: _headers(cfg))
+        _requestClient.get(categoriesUri, headers: _headers(cfg))
             .timeout(const Duration(seconds: 30)),
       ]);
 
@@ -807,8 +834,7 @@ class LanSyncClient {
     final uri = Uri.parse(
       '${cfg.normalizedBase}/api/v1/product_images/$encodedId',
     );
-    final res = await http
-        .get(uri, headers: _headers(cfg))
+    final res = await _requestClient.get(uri, headers: _headers(cfg))
         .timeout(const Duration(seconds: 8));
     if (res.statusCode != 200) throw StateError('图片下载失败：HTTP ${res.statusCode}');
     final body = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
@@ -835,8 +861,7 @@ class LanSyncClient {
   Future<String> pushCategories(LanSyncConfig cfg) async {
     final cats = await repo.listCategories();
     final uri = Uri.parse('${cfg.normalizedBase}/api/v1/categories');
-    final res = await http
-        .post(
+    final res = await _requestClient.post(
           uri,
           headers: _headers(cfg),
           body: jsonEncode({
@@ -855,8 +880,7 @@ class LanSyncClient {
     final rows = await repo.listBarcodeQueue(status: 'pending');
     if (rows.isEmpty) return 'No pending barcode queue';
     final uri = Uri.parse('${cfg.normalizedBase}/api/v1/barcode_queue');
-    final res = await http
-        .post(
+    final res = await _requestClient.post(
           uri,
           headers: _headers(cfg),
           body: jsonEncode({
@@ -965,8 +989,7 @@ class LanSyncClient {
       }
 
       final uri = Uri.parse('${cfg.normalizedBase}/api/v1/sales');
-      final res = await http
-          .post(uri, headers: _headers(cfg), body: jsonEncode({'sales': sales}))
+      final res = await _requestClient.post(uri, headers: _headers(cfg), body: jsonEncode({'sales': sales}))
           .timeout(const Duration(seconds: 45));
       final body =
           jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
@@ -1035,8 +1058,7 @@ class LanSyncClient {
       final uri = Uri.parse(
         '${cfg.normalizedBase}/api/v1/sales${since.isEmpty ? '' : '?since=${Uri.encodeQueryComponent(since)}'}',
       );
-      final res = await http
-          .get(uri, headers: _headers(cfg))
+      final res = await _requestClient.get(uri, headers: _headers(cfg))
           .timeout(const Duration(seconds: 30));
       final body =
           jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
@@ -1169,8 +1191,7 @@ class LanSyncClient {
     required String receiptNo,
   }) async {
     final uri = Uri.parse('${cfg.normalizedBase}/api/v1/notify');
-    await http
-        .post(
+    await _requestClient.post(
           uri,
           headers: _headers(cfg),
           body: jsonEncode({

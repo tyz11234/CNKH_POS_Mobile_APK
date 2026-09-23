@@ -5,6 +5,25 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+val cnkhStorePath = System.getenv("CNKH_ANDROID_KEYSTORE_PATH")
+val cnkhStorePassword = System.getenv("CNKH_ANDROID_KEYSTORE_PASSWORD")
+val cnkhKeyAlias = System.getenv("CNKH_ANDROID_KEY_ALIAS")
+val cnkhKeyPassword = System.getenv("CNKH_ANDROID_KEY_PASSWORD")
+val cnkhReleaseSigningReady = listOf(
+    cnkhStorePath,
+    cnkhStorePassword,
+    cnkhKeyAlias,
+    cnkhKeyPassword,
+).all { !it.isNullOrBlank() }
+val cnkhReleaseTaskRequested = gradle.startParameter.taskNames.any {
+    it.contains("release", ignoreCase = true)
+}
+if (cnkhReleaseTaskRequested && !cnkhReleaseSigningReady) {
+    throw GradleException(
+        "Release APK signing is not configured. Provide the CNKH_ANDROID_KEYSTORE_* environment variables.",
+    )
+}
+
 android {
     namespace = "com.cnkh.cnkh_pos_mobile"
     compileSdk = flutter.compileSdkVersion
@@ -27,9 +46,24 @@ android {
         versionName = flutter.versionName
     }
 
+    signingConfigs {
+        if (cnkhReleaseSigningReady) {
+            create("cnkhRelease") {
+                storeFile = file(cnkhStorePath!!)
+                storePassword = cnkhStorePassword
+                keyAlias = cnkhKeyAlias
+                keyPassword = cnkhKeyPassword
+            }
+        }
+    }
+
     buildTypes {
         release {
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = if (cnkhReleaseSigningReady) {
+                signingConfigs.getByName("cnkhRelease")
+            } else {
+                null
+            }
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
