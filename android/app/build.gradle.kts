@@ -15,10 +15,11 @@ val cnkhReleaseSigningReady = listOf(
     cnkhKeyAlias,
     cnkhKeyPassword,
 ).all { !it.isNullOrBlank() }
+val cnkhAllowDebugRelease = System.getenv("CNKH_ALLOW_DEBUG_RELEASE") == "true"
 val cnkhReleaseTaskRequested = gradle.startParameter.taskNames.any {
     it.contains("release", ignoreCase = true)
 }
-if (cnkhReleaseTaskRequested && !cnkhReleaseSigningReady) {
+if (cnkhReleaseTaskRequested && !cnkhReleaseSigningReady && !cnkhAllowDebugRelease) {
     throw GradleException(
         "Release APK signing is not configured. Provide the CNKH_ANDROID_KEYSTORE_* environment variables.",
     )
@@ -59,10 +60,10 @@ android {
 
     buildTypes {
         release {
-            signingConfig = if (cnkhReleaseSigningReady) {
-                signingConfigs.getByName("cnkhRelease")
-            } else {
-                null
+            signingConfig = when {
+                cnkhReleaseSigningReady -> signingConfigs.getByName("cnkhRelease")
+                cnkhAllowDebugRelease -> signingConfigs.getByName("debug")
+                else -> null
             }
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
