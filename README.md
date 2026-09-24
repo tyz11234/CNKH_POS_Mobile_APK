@@ -10,35 +10,33 @@
 
 | 项目 | 版本 |
 | --- | --- |
-| Mobile `main` 源码 | **1.10.4+32** |
+| Mobile `main` 与 Android Release | **1.10.4+32**（`v1.10.4-mobile`） |
 | 配套 Desktop `main` 与 Windows Release | **1.10.4+32**（`v1.10.4`） |
-| 最新已发布 Mobile APK | **1.10.3+31**（`v1.10.3-mobile`） |
 | LAN 协议 | `cnkh-sync:v1` |
 | OCR | 本机 Latin + Chinese ML Kit，不使用云 OCR |
 
-Mobile **1.10.4+32** 源码的静态分析、完整测试、培训资源校验及双端 LAN HTTP 回归已通过。对应 Release APK 尚未生成：发布流程要求稳定 Android 签名 keystore，当前仓库没有配置。请勿把调试签名或临时签名包当作本版本正式 APK。当前可下载 APK 仍为 **1.10.3+31**。
+Mobile **1.10.4+32** APK 已正式发布。源码的静态分析、完整测试、培训资源校验及双端 LAN HTTP 回归均通过，发布 CI 也验证了 APK 签名、权限和培训资源。
+
+本次按用户要求使用 GitHub Actions runner 的 Android Debug 密钥签名。APK 是已签名的安装包，但签名密钥不保证与旧版或未来构建相同。若 Android 报签名不匹配，不能直接覆盖安装；请先同步并备份门店数据，再卸载旧版并安装新包。卸载可能清除本地数据。后续版本建议配置稳定 keystore，以便保持相同签名。
 
 ### 下载
 
-- [最新已发布 Android APK（1.10.3+31）](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/download/v1.10.3-mobile/CNKH_POS_Mobile.apk)
-- [版本化 APK（内容相同）](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/download/v1.10.3-mobile/CNKH_POS_Mobile_v1.10.3.apk)
-- [Mobile APK 的 SHA-256 校验文件](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/download/v1.10.3-mobile/SHA256SUMS.txt)
-- 当前 APK SHA-256：`a89f826c5f9c37a3cfbae7e84f0abf06aadcb183330f0d8c0d41263b6409def6`
-- [最新 Mobile Release `v1.10.3-mobile`](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/tag/v1.10.3-mobile)
+- [Android APK（1.10.4+32）](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/download/v1.10.4-mobile/CNKH_POS_Mobile.apk)
+- [版本化 APK（内容相同）](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/download/v1.10.4-mobile/CNKH_POS_Mobile_v1.10.4.apk)
+- [Mobile APK 的 SHA-256 校验文件](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/download/v1.10.4-mobile/SHA256SUMS.txt)
+- Android APK SHA-256：`f09974f80ad1ab3638ecc40529d7e7325ae433e21806f3dfb8f1b4485ab13ef6`
+- [Mobile Release `v1.10.4-mobile`](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/tag/v1.10.4-mobile)
 - [配套 Windows x64 便携包（1.10.4+32）](https://github.com/tyz11234/CNKH_POS_Desktop/releases/download/v1.10.4/CNKH_POS_Desktop-windows-x64-v1.10.4-32.zip)
 - [Desktop Windows ZIP SHA-256 校验文件](https://github.com/tyz11234/CNKH_POS_Desktop/releases/download/v1.10.4/SHA256SUMS.txt)
 
-Mobile APK 仍沿用现有 Debug 签名。若 Android 提示签名不一致，请先同步并备份门店数据，再处理卸载重装；不要直接卸载带有未同步数据的旧版本。
-
-## 2026-09-23 · 源码 1.10.4+32
+## 2026-09-24 · 源码与 APK 1.10.4+32
 
 - 完整拉取进货历史时保留本机采购附件及其同步状态。
 - 进货附件上传失败时单独延迟重试，并继续处理后续 Outbox 操作，避免附件问题阻塞销售上传。
-- Android 正式 Release 改为要求稳定 keystore，不再使用 Debug 签名。
+- 本次 Android APK 使用 Debug 签名；后续正式更新建议配置稳定 keystore。
 - LAN 同步及 Release Notes 更新至配套 Desktop / Mobile **1.10.4+32**。
 
-本次变更范围和验证记录见 [Release Notes](RELEASE_NOTES.md)。旧 APK 与新正式签名之间可能无法直接覆盖安装；升级前请先完成业务同步和备份。
-
+本次变更范围和验证记录见 [Release Notes](RELEASE_NOTES.md)。如需从旧 APK 升级，请先完成业务同步和备份；签名不匹配时需要卸载旧 APK，可能清除本地数据。
 ## 2026-09-20 结账与数据保护修复
 
 - 保存结账时禁止关闭或重复点击；成功落库后立即处理购物车，即使页面被程序移除也不会依赖旧页面回调才能完成。
