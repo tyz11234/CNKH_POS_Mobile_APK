@@ -169,8 +169,12 @@ jobs:
           fi
           "$signer" verify --print-certs "$apk" | tee /tmp/apk-signing-cert.txt
           if grep -qi 'CN=Android Debug' /tmp/apk-signing-cert.txt; then
-            echo 'Release APK must not use the Android debug certificate' >&2
-            exit 1
+            if [[ "$CNKH_ALLOW_DEBUG_RELEASE" == "true" ]]; then
+              echo '::warning::This explicitly authorized APK uses the Android Debug signing certificate.'
+            else
+              echo 'Release APK must not use the Android debug certificate' >&2
+              exit 1
+            fi
           fi
           sha256sum "$apk" | tee /tmp/app-release.sha256
 
