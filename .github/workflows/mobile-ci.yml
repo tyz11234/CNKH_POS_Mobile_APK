@@ -78,9 +78,15 @@ jobs:
           CNKH_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.CNKH_ANDROID_KEYSTORE_PASSWORD }}
           CNKH_ANDROID_KEY_ALIAS: ${{ secrets.CNKH_ANDROID_KEY_ALIAS }}
           CNKH_ANDROID_KEY_PASSWORD: ${{ secrets.CNKH_ANDROID_KEY_PASSWORD }}
+          CNKH_DEBUG_RELEASE_ALLOWED: ${{ github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[debug-release]') }}
         shell: bash
         run: |
           set -euo pipefail
+          key_path=""
+          store_password=""
+          key_alias=""
+          key_password=""
+          allow_debug_release="false"
           if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
             key_path="$RUNNER_TEMP/cnkh-pr-validation.jks"
             store_password="pr-validation-only"
@@ -91,28 +97,32 @@ jobs:
               -storepass "$store_password" -keypass "$key_password" \
               -alias "$key_alias" -keyalg RSA -keysize 2048 -validity 2 \
               -dname "CN=CNKH PR validation, O=CNKH, C=MY"
-          else
-            if [[ -z "$CNKH_ANDROID_KEYSTORE_BASE64" ||
-                  -z "$CNKH_ANDROID_KEYSTORE_PASSWORD" ||
-                  -z "$CNKH_ANDROID_KEY_ALIAS" ||
-                  -z "$CNKH_ANDROID_KEY_PASSWORD" ]]; then
-              echo '::error::Android release signing secrets are required to build an APK.'
-              exit 1
-            fi
+          elif [[ -n "$CNKH_ANDROID_KEYSTORE_BASE64" &&
+                  -n "$CNKH_ANDROID_KEYSTORE_PASSWORD" &&
+                  -n "$CNKH_ANDROID_KEY_ALIAS" &&
+                  -n "$CNKH_ANDROID_KEY_PASSWORD" ]]; then
             key_path="$RUNNER_TEMP/cnkh-pos-release.jks"
             store_password="$CNKH_ANDROID_KEYSTORE_PASSWORD"
             key_alias="$CNKH_ANDROID_KEY_ALIAS"
             key_password="$CNKH_ANDROID_KEY_PASSWORD"
             printf '%s' "$CNKH_ANDROID_KEYSTORE_BASE64" | base64 --decode > "$key_path"
             test -s "$key_path"
+          elif [[ "$CNKH_DEBUG_RELEASE_ALLOWED" == "true" ]]; then
+            allow_debug_release="true"
+            echo "::warning::This explicitly authorized release will use the Android Debug signing key."
+          else
+            echo '::error::Android release signing secrets are required unless the main commit explicitly includes [debug-release].'
+            exit 1
           fi
-          {
-            echo "CNKH_ANDROID_KEYSTORE_PATH=$key_path"
-            echo "CNKH_ANDROID_KEYSTORE_PASSWORD=$store_password"
-            echo "CNKH_ANDROID_KEY_ALIAS=$key_alias"
-            echo "CNKH_ANDROID_KEY_PASSWORD=$key_password"
-          } >> "$GITHUB_ENV"
-
+          echo "CNKH_ALLOW_DEBUG_RELEASE=$allow_debug_release" >> "$GITHUB_ENV"
+          if [[ -n "$key_path" ]]; then
+            {
+              echo "CNKH_ANDROID_KEYSTORE_PATH=$key_path"
+              echo "CNKH_ANDROID_KEYSTORE_PASSWORD=$store_password"
+              echo "CNKH_ANDROID_KEY_ALIAS=$key_alias"
+              echo "CNKH_ANDROID_KEY_PASSWORD=$key_password"
+            } >> "$GITHUB_ENV"
+          fi
       - name: Build Android release APK
         if: github.event_name == 'pull_request' || startsWith(github.ref, 'refs/tags/') || (github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[release]'))
         run: flutter build apk --release
