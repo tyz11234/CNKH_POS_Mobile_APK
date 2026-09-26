@@ -73,7 +73,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final custom =
         (await widget.repo.getSetting(kEReceiptCacheDirKey)).trim();
     final def = await defaultEReceiptCachePath();
-    final active = await eReceiptCacheDir();
+    final active = await eReceiptCacheDir(repo: widget.repo);
     if (!mounted) return;
     setState(() {
       _path = p;
@@ -293,7 +293,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     setState(() => _resetBusy = true);
     try {
       await widget.repo.factoryResetLocalData();
-      final deleted = await clearEReceiptCache();
+      final deleted = await clearEReceiptCache(repo: widget.repo);
       await _reload();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -667,7 +667,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       ),
                       OutlinedButton.icon(
                         onPressed: () async {
-                          final n = await countEReceiptCache();
+                          final n = await countEReceiptCache(repo: widget.repo);
                           if (!context.mounted) return;
                           final ok = await showDialog<bool>(
                             context: context,
@@ -686,7 +686,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             ),
                           );
                           if (ok != true) return;
-                          final deleted = await clearEReceiptCache();
+                          final deleted = await clearEReceiptCache(repo: widget.repo);
                           if (!context.mounted) return;
                           ScaffoldMessenger.of(context).showSnackBar(
                             SnackBar(content: Text('已删除 $deleted 个缓存 PDF')),

@@ -419,7 +419,9 @@ class LanSyncClient {
       final d = await _db.db;
       await d.transaction((txn) async {
         if ((Sqflite.firstIntValue(
-                      await txn.rawQuery('SELECT COUNT(*) FROM sync_outbox'),
+                      await txn.rawQuery(
+                        "SELECT COUNT(*) FROM sync_outbox WHERE kind<>'purchase_attachment'",
+                      ),
                     ) ??
                     0) >
                 0 ||
@@ -602,11 +604,26 @@ class LanSyncClient {
       imagePath: existingImg,
       reorderLevel: (m['reorder_level'] as num?)?.toDouble() ?? 0,
     );
+    final previousStock = (existing?['stock'] as num?)?.toDouble();
     await txn.insert(
       'products',
       product.toMap(),
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
+    // Desktop owns catalog stock. Persist a local ledger marker when the
+    // authoritative snapshot changes so a later local purchase reverse sees
+    // cross-device inventory activity instead of trusting only phone moves.
+    if (previousStock != null && previousStock != product.stock) {
+      await txn.insert('stock_moves', {
+        'id': AppDatabase.newId(),
+        'product_id': id,
+        'change': product.stock - previousStock,
+        'reason': 'desktop_catalog_sync',
+        'created_at': DateTime.now().toIso8601String(),
+        'operator': 'desktop-sync',
+        'notes': 'Desktop catalog stock reconciliation',
+      });
+    }
   }
 
   Future<void> _upsertCustomer(

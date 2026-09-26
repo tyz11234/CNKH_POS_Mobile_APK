@@ -242,10 +242,11 @@ Future<String> defaultEReceiptCachePath() async {
 }
 
 /// Reads `ereceipt_cache_dir` from SQLite settings, else app support/e_receipt_cache.
-Future<Directory> eReceiptCacheDir() async {
+Future<Directory> eReceiptCacheDir({PosRepository? repo}) async {
   String custom = '';
   try {
-    custom = (await PosRepository().getSetting(kEReceiptCacheDirKey)).trim();
+    custom = (await (repo ?? PosRepository()).getSetting(kEReceiptCacheDirKey))
+        .trim();
   } catch (_) {}
   final path = custom.isNotEmpty ? custom : await defaultEReceiptCachePath();
   final dir = Directory(path);
@@ -256,8 +257,11 @@ Future<Directory> eReceiptCacheDir() async {
 }
 
 /// Delete cached PDFs older than [kEReceiptCacheTtl]. Returns deleted count.
-Future<int> purgeEReceiptCache({Duration ttl = kEReceiptCacheTtl}) async {
-  final dir = await eReceiptCacheDir();
+Future<int> purgeEReceiptCache({
+  Duration ttl = kEReceiptCacheTtl,
+  PosRepository? repo,
+}) async {
+  final dir = await eReceiptCacheDir(repo: repo);
   final cutoff = DateTime.now().subtract(ttl);
   var n = 0;
   await for (final ent in dir.list()) {
@@ -275,8 +279,8 @@ Future<int> purgeEReceiptCache({Duration ttl = kEReceiptCacheTtl}) async {
 }
 
 /// Delete all cached e-receipt PDFs. Returns deleted count.
-Future<int> clearEReceiptCache() async {
-  final dir = await eReceiptCacheDir();
+Future<int> clearEReceiptCache({PosRepository? repo}) async {
+  final dir = await eReceiptCacheDir(repo: repo);
   var n = 0;
   await for (final ent in dir.list()) {
     if (ent is! File) continue;
@@ -289,8 +293,8 @@ Future<int> clearEReceiptCache() async {
   return n;
 }
 
-Future<int> countEReceiptCache() async {
-  final dir = await eReceiptCacheDir();
+Future<int> countEReceiptCache({PosRepository? repo}) async {
+  final dir = await eReceiptCacheDir(repo: repo);
   var n = 0;
   await for (final ent in dir.list()) {
     if (ent is File && ent.path.toLowerCase().endsWith('.pdf')) n++;
@@ -306,7 +310,7 @@ Future<File> writeReceiptPdfCached(
   ReceiptTemplate? template,
   PosRepository? repo,
 }) async {
-  final dir = await eReceiptCacheDir();
+  final dir = await eReceiptCacheDir(repo: repo);
   final safe = sale.receiptNo.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_');
   final file = File('${dir.path}/receipt_$safe.pdf');
   final tmp = await writeReceiptPdfTemp(

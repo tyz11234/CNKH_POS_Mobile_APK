@@ -78,19 +78,17 @@ class PurchaseHistorySync {
     }
 
     final since = full ? '' : await repo.getSetting('lan_sync_purchases_cursor');
-    final uri = Uri.parse(
-      '$normalized/api/v1/purchases'
-      '${since.isEmpty ? '' : '?since=${Uri.encodeQueryComponent(since)}'}',
-    );
-    final response = await _client
-        .get(uri, headers: headers)
-        .timeout(const Duration(seconds: 20));
-    if (response.statusCode < 200 || response.statusCode >= 300) {
-      throw StateError('Purchase History HTTP ${response.statusCode}');
-    }
-    final body = jsonDecode(utf8.decode(response.bodyBytes));
-    if (body is! Map || body['ok'] != true || body['items'] is! List) {
-      throw StateError('Desktop Purchase History response invalid');
+    var response = await _requestHistory(normalized, headers, since);
+    var body = _decodeHistory(response);
+    final savedCursor = int.tryParse(since);
+    final responseCursor = _cursorValue(body['cursor']);
+    if (!full && savedCursor != null && responseCursor != null &&
+        responseCursor < savedCursor) {
+      // A restored Desktop backup can move its cursor backwards. The
+      // incremental response is no longer meaningful at the saved cursor;
+      // fetch a full snapshot before committing the lower cursor.
+      response = await _requestHistory(normalized, headers, '');
+      body = _decodeHistory(response);
     }
 
     final db = await _db.db;
@@ -275,6 +273,32 @@ class PurchaseHistorySync {
       message: 'Pulled $changed purchases',
     );
   }
+
+  Future<http.Response> _requestHistory(
+    String normalized,
+    Map<String, String> headers,
+    String since,
+  ) {
+    final uri = Uri.parse(
+      '$normalized/api/v1/purchases'
+      '${since.isEmpty ? '' : '?since=${Uri.encodeQueryComponent(since)}'}',
+    );
+    return _client.get(uri, headers: headers).timeout(const Duration(seconds: 20));
+  }
+
+  Map<dynamic, dynamic> _decodeHistory(http.Response response) {
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw StateError('Purchase History HTTP ${response.statusCode}');
+    }
+    final body = jsonDecode(utf8.decode(response.bodyBytes));
+    if (body is! Map || body['ok'] != true || body['items'] is! List) {
+      throw StateError('Desktop Purchase History response invalid');
+    }
+    return body;
+  }
+
+  int? _cursorValue(Object? value) =>
+      value is num ? value.toInt() : int.tryParse('$value');
 
   Future<String?> _localEntityId(
     DatabaseExecutor txn,
