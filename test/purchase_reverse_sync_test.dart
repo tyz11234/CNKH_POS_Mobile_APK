@@ -12,7 +12,10 @@ import 'package:cnkh_pos_mobile/services/purchase_ocr_repository.dart';
 import 'package:cnkh_pos_mobile/services/purchase_history_sync.dart';
 import 'package:cnkh_pos_mobile/services/sync_store.dart';
 
-http.Response _json(Map<String, Object?> body) => http.Response(jsonEncode(body), 200);
+http.Response _json(Map<String, Object?> body) => http.Response.bytes(
+  utf8.encode(jsonEncode(body)), 200,
+  headers: {'content-type': 'application/json; charset=utf-8'},
+);
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();

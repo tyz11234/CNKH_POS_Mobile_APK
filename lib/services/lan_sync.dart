@@ -317,7 +317,7 @@ class LanSyncClient {
         lastError = '$e';
         if (op['kind'] == 'purchase_attachment') {
           deferredIds.add(operationId);
-          deferredErrors.add('进货发票原图待重试：$e');
+          deferredErrors.add('进货发票原图仍待重试：$e');
           continue;
         }
         await repo.setSetting('lan_sync_last_error', '$e');
