@@ -316,6 +316,7 @@ class PosRepository {
     await d.transaction((txn) async {
       final rows = await txn.query(
         'products',
+        columns: const ['stock', 'sku', 'barcode'],
         where: 'id=?',
         whereArgs: [productId],
       );
@@ -324,6 +325,8 @@ class PosRepository {
       final delta = newStock - old;
       await queueMutation(txn, 'stocktake', productId, {
         'product_id': await remoteEntityId(txn, 'product', productId),
+        'productSku': rows.first['sku'],
+        'productBarcode': rows.first['barcode'],
         'before_stock': old,
         'stock': newStock,
         'operator': operator,
@@ -764,26 +767,50 @@ class PosRepository {
     final no = await _db.nextPurchaseNo();
     final now = DateTime.now().toIso8601String();
     await d.transaction((txn) async {
+      final localLines = <Map<String, Object?>>[];
       final remoteLines = <Map<String, Object?>>[];
+      final beforeCosts = <String, int>{};
       for (final line in lines) {
         final pid = line['productId'] as String;
-        if ((await txn.query(
+        final products = await txn.query(
           'products',
+          columns: const ['cost_cents', 'sku', 'barcode'],
           where: 'id=? AND is_deleted=0',
           whereArgs: [pid],
-        )).isEmpty)
-          throw StateError('进货商品不存在');
-        remoteLines.add({
+          limit: 1,
+        );
+        if (products.isEmpty) throw StateError('进货商品不存在');
+        final product = products.single;
+        beforeCosts[pid] ??= (product['cost_cents'] as num?)?.toInt() ?? 0;
+        // Capture the real pre-commit cost from this transaction. Repeated
+        // invoice rows for one product all keep the same original cost; the
+        // reversal planner uses the first snapshot and the last applied cost.
+        final local = <String, Object?>{
           ...line,
+          'beforeCostCents': beforeCosts[pid],
+          'productSku': product['sku'],
+          'productBarcode': product['barcode'],
+        };
+        localLines.add(local);
+        remoteLines.add({
+          ...local,
           'productId': await remoteEntityId(txn, 'product', pid),
         });
       }
+      final suppliers = await txn.query(
+        'suppliers',
+        columns: const ['phone'],
+        where: 'id=?',
+        whereArgs: [supplierId],
+        limit: 1,
+      );
       await queueMutation(txn, 'purchase', id, {
         'id': id,
         'purchase_no': no,
         'purchased_at': now,
         'supplier_id': await remoteEntityId(txn, 'supplier', supplierId),
         'supplier_name': supplierName,
+        'supplier_phone': suppliers.isEmpty ? '' : suppliers.single['phone'],
         'lines': remoteLines,
         'total_cents': totalCents,
         'operator': operator,
@@ -796,10 +823,10 @@ class PosRepository {
         'supplier_name': supplierName,
         'purchased_at': now,
         'total_cents': totalCents,
-        'lines_json': jsonEncode(lines),
+        'lines_json': jsonEncode(localLines),
         'notes': notes,
       });
-      for (final line in lines) {
+      for (final line in localLines) {
         final pid = line['productId'] as String;
         final qty = (line['qty'] as num).toDouble();
         final unitCost = (line['unitCostCents'] as num?)?.toInt();

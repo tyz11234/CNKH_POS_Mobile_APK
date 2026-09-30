@@ -26,6 +26,8 @@ void main() {
     database = AppDatabase.forTesting('${dir.path}/pos.db', seed: false);
     repo = PosRepository(database: database);
     await repo.upsertProduct(product);
+    // This is fixture data; these tests exercise sale and stock mutations.
+    await (await database.db).delete('sync_outbox');
     uploadedStates = [];
     operationOrder = [];
     blockActiveSales = false;

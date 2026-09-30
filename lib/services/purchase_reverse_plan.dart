@@ -27,6 +27,28 @@ Future<List<PurchaseReversePlan>> planPurchaseReverse(
   DatabaseExecutor txn,
   Map<String, Object?> purchase,
 ) async {
+  final hostRows = await txn.query(
+    'settings',
+    columns: const ['value'],
+    where: 'key=?',
+    whereArgs: const ['lan_sync_host'],
+    limit: 1,
+  );
+  final historyCapability = await txn.query(
+    'settings',
+    columns: const ['value'],
+    where: 'key=?',
+    whereArgs: const ['lan_sync_stock_moves_supported'],
+    limit: 1,
+  );
+  final pairedHost = hostRows.isNotEmpty &&
+      '${hostRows.single['value']}'.trim().isNotEmpty;
+  final hasCompleteRemoteHistory = historyCapability.isNotEmpty &&
+      historyCapability.single['value'] == '1';
+  if (pairedHost && !hasCompleteRemoteHistory) {
+    throw StateError('当前 Desktop 未提供完整库存流水；请升级 Desktop 并同步后再撤销进货');
+  }
+
   final purchaseNo = purchase['purchase_no']?.toString() ?? '';
   final rawLines = jsonDecode(purchase['lines_json']?.toString() ?? '[]');
   if (purchaseNo.isEmpty || rawLines is! List || rawLines.isEmpty) {

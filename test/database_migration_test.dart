@@ -1,14 +1,16 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sqflite/sqflite.dart';
 
 import 'package:cnkh_pos_mobile/db/app_database.dart';
+import 'package:cnkh_pos_mobile/services/sync_store.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  test('v7 database upgrades through OCR to v9 without losing business data',
+  test('v7 database upgrades through v10 without losing business/outbox data',
       () async {
     AppDatabase.ensureFfi();
     final dir = await Directory.systemTemp.createTemp('cnkh_migration_test_');
@@ -44,7 +46,11 @@ CREATE TABLE sales (
   subtotal_cents INTEGER NOT NULL,
   total_cents INTEGER NOT NULL,
   paid_cents INTEGER NOT NULL,
-  lines_json TEXT NOT NULL
+  lines_json TEXT NOT NULL,
+  customer_id TEXT,
+  voided INTEGER NOT NULL DEFAULT 0,
+  void_note TEXT NOT NULL DEFAULT '',
+  synced_at TEXT
 )''');
         await db.execute('''
 CREATE TABLE customers (
@@ -82,6 +88,11 @@ CREATE TABLE sync_outbox (
   payload_json TEXT NOT NULL,
   created_at TEXT NOT NULL
 )''');
+        await db.execute('''CREATE TABLE stock_moves (
+          id TEXT PRIMARY KEY,product_id TEXT NOT NULL,change REAL NOT NULL,
+          reason TEXT NOT NULL,created_at TEXT NOT NULL,operator TEXT NOT NULL,
+          notes TEXT NOT NULL DEFAULT '')''');
+        await db.execute('CREATE TABLE settings (key TEXT PRIMARY KEY,value TEXT NOT NULL)');
       },
     );
 
@@ -148,14 +159,26 @@ CREATE TABLE sync_outbox (
     final app = AppDatabase.forTesting(path, seed: false);
     final db = await app.db;
 
-    expect(await db.getVersion(), 9);
+    expect(await db.getVersion(), 10);
     expect(await db.query('e_invoice_status'), isEmpty);
     expect(Sqflite.firstIntValue(await db.rawQuery('SELECT COUNT(*) FROM products')), 1);
     expect(Sqflite.firstIntValue(await db.rawQuery('SELECT COUNT(*) FROM sales')), 1);
     expect(Sqflite.firstIntValue(await db.rawQuery('SELECT COUNT(*) FROM customers')), 1);
     expect(Sqflite.firstIntValue(await db.rawQuery('SELECT COUNT(*) FROM suppliers')), 1);
     expect(Sqflite.firstIntValue(await db.rawQuery('SELECT COUNT(*) FROM purchases')), 1);
-    expect(Sqflite.firstIntValue(await db.rawQuery('SELECT COUNT(*) FROM sync_outbox')), 1);
+    final recoveredOutbox = await db.query('sync_outbox', orderBy: 'seq ASC');
+    expect(recoveredOutbox.map((row) => row['kind']), ['supplier_upsert', 'purchase', 'sale_upload']);
+    expect(recoveredOutbox.last['id'], 'out1');
+    expect(recoveredOutbox.map((row) => row['delivery_state']), ['pending','needs_review','pending']);
+    expect(
+      jsonDecode(recoveredOutbox.last['payload_json'] as String),
+      {'sale_id': 'sale1'},
+    );
+    await queueMutation(db, 'stocktake', 'p1', {'product_id': 'p1', 'before_stock': 8, 'stock': 9});
+    final appended = (await db.query('sync_outbox', orderBy: 'seq DESC', limit: 1)).single;
+    expect(appended['kind'], 'stocktake');
+    expect(appended['seq'], greaterThan(recoveredOutbox.length));
+    expect((await db.query('sync_outbox', where: 'id=?', whereArgs: ['out1'])).single['entity_type'], 'sale');
 
     final purchaseColumns = await db.rawQuery('PRAGMA table_info(purchases)');
     final names = purchaseColumns.map((row) => row['name']).toSet();
@@ -177,6 +200,101 @@ CREATE TABLE sync_outbox (
       ]),
     );
 
+    await app.close();
+    await dir.delete(recursive: true);
+  });
+
+  test('unpaired legacy purchase is queued once during v9 to v10 migration', () async {
+    AppDatabase.ensureFfi();
+    final dir = await Directory.systemTemp.createTemp('cnkh_legacy_purchase_');
+    final path = '${dir.path}/legacy_v9.db';
+    var app = AppDatabase.forTesting(path, seed: false);
+    var db = await app.db;
+    await db.insert('products', {
+      'id': 'phone-product',
+      'name_zh': '商品',
+      'name_en': 'Product',
+      'sku': 'SKU-1',
+      'barcode': '10001',
+      'price_cents': 500,
+      'cost_cents': 200,
+      'stock': 15,
+      'unit': 'pcs',
+      'category': '',
+      'is_deleted': 0,
+      'image_path': '',
+      'reorder_level': 0,
+    });
+    await db.insert('purchases', {
+      'id': 'offline-purchase',
+      'purchase_no': 'PO-OFFLINE-1',
+      'supplier_id': 'phone-supplier',
+      'supplier_name': 'Supplier',
+      'purchased_at': '2026-09-26T10:00:00Z',
+      'total_cents': 1250,
+      'lines_json': jsonEncode([
+        {'productId': 'phone-product', 'qty': 5, 'unitCostCents': 250},
+      ]),
+      'notes': 'created before pairing',
+    });
+    await db.insert('sales', {
+      'id': 'offline-sale',
+      'receipt_no': 'R-OFFLINE-1',
+      'sold_at': '2026-09-26T09:59:00Z',
+      'cashier': 'admin',
+      'payment_method': 'cash',
+      'subtotal_cents': 100,
+      'total_cents': 100,
+      'paid_cents': 100,
+      'lines_json': jsonEncode([
+        {'productId': 'phone-product', 'qty': 1},
+      ]),
+      'voided': 1,
+      'void_note': 'voided offline',
+    });
+    await db.update('products', {'stock': 16}, where: 'id=?', whereArgs: ['phone-product']);
+    for (final move in [
+      {'id':'move-purchase','change':5.0,'reason':'purchase','notes':'PO-OFFLINE-1','created_at':'2026-09-26T10:00:00Z'},
+      // A device clock rollback must not move this sale before its purchase.
+      {'id':'move-sale','change':-1.0,'reason':'sale','notes':'R-OFFLINE-1','created_at':'2026-09-26T09:59:00Z'},
+      {'id':'move-sale-void','change':1.0,'reason':'sale_void','notes':'R-OFFLINE-1','created_at':'2026-09-26T10:02:00Z'},
+      {'id':'move-stocktake','change':1.0,'reason':'stocktake','notes':'counted','created_at':'2026-09-26T10:03:00Z'},
+    ]) {
+      await db.insert('stock_moves', {
+        'id': move['id'], 'product_id':'phone-product', 'change':move['change'],
+        'reason':move['reason'], 'created_at':move['created_at'], 'operator':'admin',
+        'notes':move['notes'],
+      });
+    }
+    await db.setVersion(9);
+    await app.close();
+
+    app = AppDatabase.forTesting(path, seed: false);
+    db = await app.db;
+    expect(await db.getVersion(), 10);
+    var pending = await db.query(
+      'sync_outbox',
+      orderBy: 'seq ASC',
+    );
+    expect(pending.map((row)=>row['kind']), ['product_upsert','purchase','sale_upload','sale_void','stocktake']);
+    final baseline=jsonDecode(pending.first['payload_json'] as String) as Map;
+    expect(baseline['row']['stock'],10);
+    final purchaseOp=pending.firstWhere((row)=>row['kind']=='purchase');
+    final payload = jsonDecode(purchaseOp['payload_json'] as String) as Map;
+    final line = (payload['lines'] as List).single as Map;
+    expect(line['productSku'], 'SKU-1');
+    expect(line['productBarcode'], '10001');
+    expect(line['productId'], 'phone-product');
+    final stocktake=jsonDecode(pending.last['payload_json'] as String) as Map;
+    expect(stocktake['before_stock'],15);
+    expect(stocktake['stock'],16);
+
+    await db.setVersion(9);
+    await app.close();
+    app = AppDatabase.forTesting(path, seed: false);
+    db = await app.db;
+    pending = await db.query('sync_outbox', orderBy:'seq ASC');
+    expect(pending.map((row)=>row['kind']), ['product_upsert','purchase','sale_upload','sale_void','stocktake']);
     await app.close();
     await dir.delete(recursive: true);
   });

@@ -17,6 +17,7 @@ import '../models/product.dart';
 import 'document_numbers.dart';
 import 'ocr_purchase_schema.dart';
 import 'reliability_schema.dart';
+import 'legacy_purchase_outbox_migration.dart';
 
 /// Local-first SQLite for CNKH POS Mobile (demo / companion).
 class AppDatabase {
@@ -81,7 +82,7 @@ class AppDatabase {
     final path = _testPath ?? p.join(dir!.path, 'cnkh_pos_mobile.db');
     _db = await openDatabase(
       path,
-      version: 9,
+      version: 10,
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
       onOpen: (db) async {
@@ -343,6 +344,11 @@ CREATE TABLE IF NOT EXISTS barcode_print_queue (
     }
     if (oldVersion < 8) {
       await ensureOcrPurchaseSchema(db);
+    }
+    if (oldVersion < 10) {
+      await ensureReliabilitySchema(db);
+      await ensureOcrPurchaseSchema(db);
+      await enqueueLegacyUnpairedPurchases(db);
     }
   }
 

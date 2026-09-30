@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -291,6 +292,11 @@ Grand Total RM 1,592.57''',
       final afterCommit = await posRepo.getProduct('p1');
       expect(afterCommit!.stock, 15);
       expect(afterCommit.costCents, 320);
+      final committed=(await (await database.db).query(
+        'purchases',where:'id=?',whereArgs:[purchaseId],
+      )).single;
+      final committedLines=jsonDecode(committed['lines_json'] as String) as List;
+      expect((committedLines.single as Map)['beforeCostCents'],300);
       final alias = await ocrRepo.lookupAlias('s1', 'Coca Cola');
       expect(alias?['product_id'], 'p1');
 

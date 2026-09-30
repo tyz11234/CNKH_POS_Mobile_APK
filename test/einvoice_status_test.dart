@@ -21,6 +21,9 @@ void main(){
       final status={'document_id':'doc','sale_id':'desktop-id','client_sale_id':sale.id,'receipt_no':sale.receiptNo,'environment':'production','status':'validated','updated_at':'2026-09-13T00:00:00Z'};
       await store.replaceSnapshot('http://pc',[status]);
       expect((await store.history('http://pc','production')).single['status'],'validated');
+      await store.replaceSnapshot('http://pc',[{...status,'status':'invalid'}]);
+      expect((await store.history('http://pc','production')).single['status'],'invalid');
+      await store.replaceSnapshot('http://pc',[status]);
       expect((await store.history('http://other','production')).single['status'],'pending');
       expect((await store.history('http://pc','sandbox')).single['status'],'pending');
       await expectLater(store.replaceSnapshot('http://pc',[{...status,'status':'bogus'}]),throwsFormatException);
