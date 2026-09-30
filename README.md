@@ -10,13 +10,13 @@
 
 | 项目 | 版本 |
 | --- | --- |
-| Mobile `main` 与 Android Release | **1.10.5+33**（`v1.10.5-mobile`） |
-| 配套 Desktop `main` 与 Windows Release | **1.10.5+33**（`v1.10.5`） |
+| Mobile `main` 与 Android Release | **1.10.6+34**（`v1.10.6-mobile`） |
+| 配套 Desktop `main` 与 Windows Release | **1.10.6+34**（`v1.10.6`） |
 | LAN 协议 | `cnkh-sync:v1` |
-| 本次发布源码 | **1.10.6+34 / schema v10**，PR 回归及构建已通过，正式发布流程待完成 |
+| 本地数据库 | **schema v10**，自动增量升级旧数据库 |
 | OCR | 本机 Latin + Chinese ML Kit，不使用云 OCR |
 
-Mobile **1.10.5+33** APK 通过 Release CI 构建并发布。该版本修复跨设备进货撤销安全、附件失败阻塞数据拉取和进货历史游标回退；完整变更与测试结果见 [Release Notes](RELEASE_NOTES.md)。
+Mobile **1.10.6+34** APK 通过 Release CI 构建并发布。该版本修复库存历史遗漏、首次配对业务持久化、全量目录对账及进货成本恢复，并与 Desktop 的审计纠错流程配套；完整变更与测试结果见 [Release Notes](RELEASE_NOTES.md)。
 
 ## 2026-10-01 · 1.10.6+34
 
@@ -25,20 +25,23 @@ Mobile **1.10.5+33** APK 通过 Release CI 构建并发布。该版本修复跨�
 - 完整目录停用快照中消失的已映射资料，保护未上传业务；独立进货历史同步同样等待待确认操作。
 - 手动进货事务保存进货前成本，重复商品行共享原快照；配对后采用 Desktop 权威成本。同步最终 Invalid 状态，纠错提交仍由 Desktop 处理。
 
-GitHub Actions 已实际执行：Mobile 完整测试 **124 项**、Desktop **116 项**、双端真实 HTTP 回归 **19 项**全部通过；Android Release APK 与 Windows Release 构建通过。分析采用现有 CI 参数 `--no-fatal-infos --no-fatal-warnings`：Mobile **0 error / 5 warnings / 37 infos**，Desktop **0 error / 6 warnings / 38 infos**。正式发布流程完成后更新下方下载链接与校验值。逐项证据、命令、日志与范围见 [FIX_VERIFICATION.md](FIX_VERIFICATION.md)。
+GitHub Actions 已实际执行：Mobile 完整测试 **124 项**、Desktop **116 项**、双端真实 HTTP 回归 **19 项**全部通过；Android Release APK 与 Windows Release 构建通过。分析采用现有 CI 参数 `--no-fatal-infos --no-fatal-warnings`：Mobile **0 error / 5 warnings / 37 infos**，Desktop **0 error / 6 warnings / 38 infos**。正式 Release 的 main 工作流也已重跑通过，安装包与校验文件已上传。逐项证据、命令、日志与范围见 [FIX_VERIFICATION.md](FIX_VERIFICATION.md)。
 
-APK 由 Mobile Release 工作流按仓库签名配置签名：配置完整的稳定 keystore 时使用该密钥；否则在获授权的发布任务中使用 Android Debug 密钥。签名与已安装版本不匹配时，Android 会拒绝覆盖安装；请先同步并备份门店数据，再处理卸载与安装，卸载可能清除本地数据。
+本次 APK 是 Release 构建，实际使用 **Android Debug 签名证书**；没有使用稳定发布 keystore。证书 SHA-256：`4e28edc15b7df8f8fe3245805e7a7db7e88ba5c5217cd76fa196d993b12f2fc4`。该证书不保证与旧 APK 或未来构建一致；签名不匹配时 Android 会拒绝覆盖安装。请保留旧版，先同步并备份业务数据，尤其是未确认的离线操作；卸载会清除应用本地数据。
 
 ### 下载
 
-- [Android APK（1.10.5+33）](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/download/v1.10.5-mobile/CNKH_POS_Mobile.apk)
-- [版本化 APK（内容相同）](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/download/v1.10.5-mobile/CNKH_POS_Mobile_v1.10.5.apk)
-- [Mobile APK 的 SHA-256 校验文件](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/download/v1.10.5-mobile/SHA256SUMS.txt)
-- [Mobile Release `v1.10.5-mobile`](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/tag/v1.10.5-mobile)
-- [配套 Windows x64 便携包（1.10.5+33）](https://github.com/tyz11234/CNKH_POS_Desktop/releases/download/v1.10.5/CNKH_POS_Desktop-windows-x64-v1.10.5-33.zip)
-- [Desktop Windows ZIP SHA-256 校验文件](https://github.com/tyz11234/CNKH_POS_Desktop/releases/download/v1.10.5/SHA256SUMS.txt)
+- [Android APK（1.10.6+34）](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/download/v1.10.6-mobile/CNKH_POS_Mobile.apk)
+- [版本化 APK（内容相同）](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/download/v1.10.6-mobile/CNKH_POS_Mobile_v1.10.6.apk)
+- [Mobile APK 的 SHA-256 校验文件](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/download/v1.10.6-mobile/SHA256SUMS.txt)
+- [Mobile Release `v1.10.6-mobile`](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/tag/v1.10.6-mobile)
+- [配套 Windows x64 便携包（1.10.6+34）](https://github.com/tyz11234/CNKH_POS_Desktop/releases/download/v1.10.6/CNKH_POS_Desktop-windows-x64-v1.10.6-34.zip)
+- [Desktop Windows ZIP SHA-256 校验文件](https://github.com/tyz11234/CNKH_POS_Desktop/releases/download/v1.10.6/SHA256SUMS.txt)
 
-SHA-256（按上述 Release 资产计算）：Mobile APK `a38ae8daae263aa34e2443e2bc8b0f9d930b06b2c52506b0c386ec610ee7bdbb`；Desktop ZIP `009e63826fb881f012d61b501640b4004891a408dc1f54101e0b82f77443cd9e`。
+| 发布文件 | SHA-256 |
+| --- | --- |
+| `CNKH_POS_Mobile.apk`（两个 APK 文件内容相同） | `e68f680c57928aa160a7a82a4ea18fcf1599532b7682672a4f2c8ad1292b46b8` |
+| `CNKH_POS_Desktop-windows-x64-v1.10.6-34.zip` | `ac6edbda2da3c1f484461e7df2d38490142f8fb28fab6780e6983284ab40c7e8` |
 
 ## 2026-09-26 · 源码与 APK 1.10.5+33
 
@@ -126,7 +129,7 @@ SHA-256（按上述 Release 资产计算）：Mobile APK `a38ae8daae263aa34e2443
 
 右上角及 Settings 原培训入口均提供 11 课：登录与权限、商品销售、收款、退款、库存、手机连接电脑、数据同步、数据备份、e-Invoice 设置、e-Invoice 提交、常见错误处理。
 
-培训使用 `tool/training_capture_test.dart` 实际渲染的应用页面截图；箭头坐标来自真实控件位置，可缩放查看。截图资料为隔离测试数据库内容，配对截图不是门店可用配对码。Mobile 的电脑操作课程使用同版本 Desktop 截图。
+培训使用 `tool/training_capture_test.dart` 实际渲染的应用页面截图；箭头坐标来自真实控件位置，可缩放查看。截图资料为隔离测试数据库内容，配对截图不是门店可用配对码。Desktop 培训使用本版本实际截图；Mobile 的电脑操作课程沿用其工作流固定的 Desktop 源码截图（见下方开发与验证）。
 
 ### 开发与验证
 
@@ -199,7 +202,7 @@ SQLite 原子入库
     ↓
 Persistent Outbox
     ↓
-Desktop v0.4.0
+Desktop 1.10.6+34
 ```
 
 ### OCR 入口
@@ -360,7 +363,7 @@ APK 因内置中文 OCR 模型，体积会比 v1.8.x 明显增大。
 
 ## 连接电脑端
 
-1. 安装并启动 **Desktop v0.4.0**。
+1. 安装并启动配套 **Desktop 1.10.6+34**。
 2. 手机和电脑连接同一 Wi-Fi / LAN。
 3. Desktop 打开 LAN / 扫码配对页面。
 4. Mobile 扫描电脑二维码。
@@ -401,7 +404,7 @@ PIN 连续输错 5 次会锁定 5 分钟。Mobile 与 Desktop 账号凭据分别
 
 ## 安装说明
 
-1. 推荐先安装/更新 Desktop v0.4.0。
+1. 先备份并更新配套 Desktop 1.10.6+34，再安装 Mobile。
 2. Android 下载 `CNKH_POS_Mobile.apk`。
 3. 按 Android 提示允许当前下载或文件管理 App 安装 APK。
 4. 安装后登录并重新确认 LAN 配对状态。
