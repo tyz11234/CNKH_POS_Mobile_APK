@@ -4,7 +4,7 @@
 
 基于 **Flutter / Dart**，使用本地 SQLite 保存业务数据。核心收银与店内同步不依赖云服务器。
 
-> README 最后更新：**2026-09-30**。`main` 是完整源码与发布分支；`source/main` 仅保留为兼容分支。
+> README 最后更新：**2026-10-01**。`main` 是完整源码与发布分支；`source/main` 仅保留为兼容分支。
 
 ## 当前源码与发布版本
 
@@ -13,19 +13,19 @@
 | Mobile `main` 与 Android Release | **1.10.5+33**（`v1.10.5-mobile`） |
 | 配套 Desktop `main` 与 Windows Release | **1.10.5+33**（`v1.10.5`） |
 | LAN 协议 | `cnkh-sync:v1` |
-| 修复分支源码（未发布） | **1.10.6+34 / schema v10**，验收限制见下方 |
+| 本次发布源码 | **1.10.6+34 / schema v10**，PR 回归及构建已通过，正式发布流程待完成 |
 | OCR | 本机 Latin + Chinese ML Kit，不使用云 OCR |
 
 Mobile **1.10.5+33** APK 通过 Release CI 构建并发布。该版本修复跨设备进货撤销安全、附件失败阻塞数据拉取和进货历史游标回退；完整变更与测试结果见 [Release Notes](RELEASE_NOTES.md)。
 
-## 2026-09-30 · 1.10.6+34 修复源码（未发布）
+## 2026-10-01 · 1.10.6+34
 
 - 配对前的本地业务持久化到 Outbox；首次同步先上传再应用目录。v10 恢复可核实的旧未配对业务，库存基线与业务增量分开上传，重试保持幂等。
 - 同步 Desktop 的完整库存活动，销售后作废也会阻止不安全撤销。配对撤销收到 ACK 后才执行本机反向流水；明确拒绝保留请求与审计，未知结果等待原请求确认。
 - 完整目录停用快照中消失的已映射资料，保护未上传业务；独立进货历史同步同样等待待确认操作。
 - 手动进货事务保存进货前成本，重复商品行共享原快照；配对后采用 Desktop 权威成本。同步最终 Invalid 状态，纠错提交仍由 Desktop 处理。
 
-本次环境没有 Flutter/Dart，分析、完整测试、HTTP 回归及构建命令均返回 127，未完成验收，也未发布 APK。逐项证据、代码入口、用例与实际结果见 [FIX_VERIFICATION.md](FIX_VERIFICATION.md)。
+GitHub Actions 已实际执行：Mobile 完整测试 **124 项**、Desktop **116 项**、双端真实 HTTP 回归 **19 项**全部通过；Android Release APK 与 Windows Release 构建通过。分析采用现有 CI 参数 `--no-fatal-infos --no-fatal-warnings`：Mobile **0 error / 5 warnings / 37 infos**，Desktop **0 error / 6 warnings / 38 infos**。正式发布流程完成后更新下方下载链接与校验值。逐项证据、命令、日志与范围见 [FIX_VERIFICATION.md](FIX_VERIFICATION.md)。
 
 APK 由 Mobile Release 工作流按仓库签名配置签名：配置完整的稳定 keystore 时使用该密钥；否则在获授权的发布任务中使用 Android Debug 密钥。签名与已安装版本不匹配时，Android 会拒绝覆盖安装；请先同步并备份门店数据，再处理卸载与安装，卸载可能清除本地数据。
 
@@ -115,9 +115,9 @@ SHA-256（按上述 Release 资产计算）：Mobile APK `a38ae8daae263aa34e2443
 
 ### 数据库与凭据
 
-- Desktop schema **v9**：新增 `e_invoice_settings`、`e_invoice_documents`、`e_invoice_logs`；v8 及更早版本自动执行增量迁移，原业务表数据不变。
-- Mobile schema **v9**：新增独立 `e_invoice_status` 镜像表；按电脑地址和环境隔离，不修改 sales。
-- 修复源码 schema **v10**：Desktop 保留原提交并增加尝试序号和父记录；Mobile 扩展 Outbox 并恢复可核实的从未配对业务。迁移回归本次已编写但未执行。
+- Desktop schema **v9** 时引入 `e_invoice_settings`、`e_invoice_documents`、`e_invoice_logs`；v8 及更早版本自动执行增量迁移，原业务表数据不变。
+- Mobile schema **v9** 时引入独立 `e_invoice_status` 镜像表；按电脑地址和环境隔离，不修改 sales。
+- 当前 schema **v10**：Desktop 保留原提交并增加尝试序号和父记录；Mobile 扩展 Outbox 并恢复可核实的从未配对业务。旧数据库升级、重复迁移及业务数据保留回归已通过。
 - Client ID 和 Secret 以 AES-256-GCM 密文保存在 e_invoice_settings，密钥使用操作系统安全存储；OAuth Token 仅驻留内存。日志不记录凭据或完整发票资料。
 - 旧 scaffold 中若曾人工保存明文凭据，升级后会清空该明文，需重新输入。公司和提交资料保留。旧备份可能仍含其原始内容，请按敏感资料保管。
 - 更换电脑/Windows 用户或丢失 OS 密钥后，需要重新输入凭据。数据库备份保留加密内容，不导出解密密钥。
@@ -130,9 +130,9 @@ SHA-256（按上述 Release 资产计算）：Mobile APK `a38ae8daae263aa34e2443
 
 ### 开发与验证
 
-完整变更、测试结果、构建记录及已知范围见 [EINVOICE_REPORT.md](EINVOICE_REPORT.md)。手机打包固定 Desktop `v0.4.0` 对应源码 `47c665de`；Desktop 联调默认固定已测试 Mobile 源码，手动运行可通过 `mobile_ref` 指定其他版本。
+完整变更、测试结果、构建记录及已知范围见 [EINVOICE_REPORT.md](EINVOICE_REPORT.md)。手机培训截图使用既有 Desktop `v0.4.0` 源码 `02e3574b`；双端 HTTP 联调读取 `.github/paired-*-ref` 固定已验证源码，手动运行可指定 companion ref。
 
-发布 CI 执行 `flutter analyze`、完整 `flutter test`、真实页面截图捕获，再执行 Windows/APK Release 构建。截图先生成到 `assets/training/` 再打包。源码首次运行前也需要生成截图；Mobile 截图流程须准备 `.training_desktop` 源码及其字体，参照 `mobile-ci.yml`。双端真实 HTTP 回归位于 Desktop `integration/`，运行 `flutter test test regression`。
+发布 CI 执行 `flutter analyze --no-fatal-infos --no-fatal-warnings`、完整 `flutter test`、真实页面截图捕获，再执行 Windows/APK Release 构建。截图先生成到 `assets/training/` 再打包。源码首次运行前也需要生成截图；Mobile 截图流程须准备 `.training_desktop` 源码及其字体，参照 `mobile-ci.yml`。双端真实 HTTP 回归位于 Desktop `integration/`，运行 `flutter test test regression`。
 
 目前 API 自动测试使用 HTTP 模拟响应，覆盖 OAuth 缓存/过期/401、提交成功/失败、重复提交和结果未知。真实 MyInvois Sandbox / Production 验收需要店主提供的已授权凭据，目前未执行真实税务提交。构建成功不等于真实设备、打印机或门店网络已验收。
 
@@ -412,13 +412,14 @@ APK 只能安装在 Android，不能直接安装到 iPhone。
 
 ## 验证
 
-本轮源码基线已通过：
+1.10.6+34 的实际 CI 结果：
 
-- Mobile 静态分析、**86 项 Flutter 测试**、Release APK 构建与 INTERNET 权限检查。
-- Desktop 静态分析、**91 项 Flutter 测试**与 Windows Release 构建。
-- **8 项双端 HTTP 同步与断线重连测试**。
+- Mobile `flutter test`：**124 项通过**；Desktop `flutter test`：**116 项通过**。
+- Desktop `integration/` 下 `flutter test test regression`：**19 项真实 HTTP 回归通过**。
+- 两端 `flutter analyze --no-fatal-infos --no-fatal-warnings`：无 error，保留上方列出的 warnings / infos。
+- Release APK、Windows Release、培训截图及资源校验通过。PR APK 使用独立临时验证签名，正式下载仅使用 Release 资产。
 
-[Mobile 发布流程](https://github.com/tyz11234/CNKH_POS_Mobile_APK/actions/workflows/mobile-ci.yml) 会重新执行分析、测试和构建，通过后上传附件。未执行真机覆盖升级、打印机及真实门店局域网验收。
+本机未安装 Flutter，原本的本地命令退出 127；以上结果来自 GitHub Actions，日志见 [FIX_VERIFICATION.md](FIX_VERIFICATION.md)。未执行真机覆盖升级、打印机、真实门店网络和真实 MyInvois Sandbox / Production 提交。
 
 ## 当前不包含
 
