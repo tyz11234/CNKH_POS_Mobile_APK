@@ -14,6 +14,7 @@ import '../../services/pos_repository.dart';
 import '../../services/purchase_invoice_image_store.dart';
 import '../../services/purchase_invoice_parser.dart';
 import '../../services/purchase_ocr_repository.dart';
+import '../../services/lan_sync.dart';
 import '../../theme/cnkh_theme.dart';
 
 class PurchaseOcrScreen extends StatefulWidget {
@@ -1105,12 +1106,22 @@ class _PurchaseDetailScreenState extends State<PurchaseDetailScreen> {
     );
     if (ok != true) return;
     try {
+      final sync = LanSyncClient(widget.repo);
+      final config = await sync.loadConfig();
+      if (config != null) await sync.synchronize(config);
       await _ocrRepo.reversePurchase(
         purchaseId: widget.purchaseId,
         operator: widget.user.username,
         reason: reason,
         notes: notes.text.trim(),
       );
+      if (config != null) {
+        await sync.synchronize(config);
+        final confirmed = await _ocrRepo.getPurchase(widget.purchaseId);
+        if (confirmed?['reversed'] != 1) {
+          throw StateError(sync.lastError ?? '撤销尚未获得 Desktop 确认，请同步后核对；请求已保留');
+        }
+      }
       await _load();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -1118,6 +1129,7 @@ class _PurchaseDetailScreenState extends State<PurchaseDetailScreen> {
         );
       }
     } catch (e) {
+      await _load();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('$e')),

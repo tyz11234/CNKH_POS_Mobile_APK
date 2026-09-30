@@ -31,6 +31,8 @@ void main() {
     repo = PosRepository(database: database);
     await repo.upsertProduct(product);
     await repo.upsertProduct(otherProduct);
+    // Keep the fixture catalog out of the sale retry assertions.
+    await (await database.db).delete('sync_outbox');
     server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     server.listen((request) async {
       final body = jsonDecode(await utf8.decoder.bind(request).join()) as Map;

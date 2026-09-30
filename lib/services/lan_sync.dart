@@ -13,6 +13,7 @@ import 'pos_repository.dart';
 import 'sync_store.dart';
 import 'product_images.dart';
 import 'product_image_sync_queue.dart';
+import 'purchase_reverse_sync.dart';
 
 const String kPairingPrefix = 'cnkh-sync:v1|';
 
@@ -133,7 +134,7 @@ class LanSyncClient {
     final deferredError = await _drainPending(cfg);
     return deferredError == null
         ? '待同步操作已上传'
-        : '销售已上传；进货发票原图仍待重试';
+        : '销售已上传；$deferredError';
   });
   Future<String> synchronize(
     LanSyncConfig cfg, {
@@ -144,6 +145,12 @@ class LanSyncClient {
     if (h['stock_policy'] != null) {
       await repo.setSetting('stock_policy', '${h['stock_policy']}');
     }
+    final capabilities = h['capabilities'] as List? ?? const [];
+    final stockMovesSupported = capabilities.contains('stock_moves_v1');
+    await repo.setSetting(
+      'lan_sync_stock_moves_supported',
+      stockMovesSupported ? '1' : '0',
+    );
     final d = await _db.db;
     final pending =
         Sqflite.firstIntValue(
@@ -154,16 +161,29 @@ class LanSyncClient {
         !(h['capabilities'] as List? ?? []).contains('mutations_v1')) {
       throw StateError('请先更新电脑端，手机待同步数据已保留');
     }
-    final deferredAttachmentError = await _drainPending(cfg);
+    final deferredError = await _drainPending(cfg);
     final cursor = (h['cursor'] as num?)?.toInt();
+    var catalogCursorRolledBack = false;
     for (final key in ['lan_sync_products_cursor', 'lan_sync_sales_cursor']) {
       if (full ||
           (cursor != null &&
               (int.tryParse(await repo.getSetting(key)) ?? 0) > cursor)) {
+        if (key == 'lan_sync_products_cursor' && !full && cursor != null) {
+          catalogCursorRolledBack = true;
+        }
         await repo.setSetting(key, '');
       }
     }
-    final a = await _pullCatalog(cfg);
+    final hostStockCursor = (h['stock_moves_cursor'] as num?)?.toInt() ?? 0;
+    final localStockCursor =
+        int.tryParse(await repo.getSetting('lan_sync_stock_moves_cursor')) ?? 0;
+    final fullStockMoves = full || catalogCursorRolledBack ||
+        (stockMovesSupported && hostStockCursor < localStockCursor);
+    final a = await _pullCatalog(
+      cfg,
+      stockMovesSupported: stockMovesSupported,
+      fullStockMoves: fullStockMoves,
+    );
     final b = await _pullSales(cfg);
     await pushBarcodeQueue(cfg);
     if ((h['capabilities'] as List? ?? []).contains('einvoice_status_v1')) {
@@ -175,11 +195,11 @@ class LanSyncClient {
       }
     }
     await _syncImages(cfg);
-    lastError = deferredAttachmentError;
-    await repo.setSetting('lan_sync_last_error', deferredAttachmentError ?? '');
-    return deferredAttachmentError == null
+    lastError = deferredError;
+    await repo.setSetting('lan_sync_last_error', deferredError ?? '');
+    return deferredError == null
         ? '$a\n$b'
-        : '$a\n$b\n进货发票原图待重试，其他同步已继续';
+        : '$a\n$b\n$deferredError；其他同步已继续';
   });
 
   Future<void> _syncImages(LanSyncConfig cfg) async {
@@ -201,7 +221,7 @@ class LanSyncClient {
     final rows = <Map<String, dynamic>>[];
     var after = '';
     while (true) {
-      final uri = Uri.parse('${cfg.normalizedBase}/api/v1/einvoices').replace(queryParameters: {'after': after});
+      final uri = Uri.parse('${cfg.normalizedBase}/api/v1/einvoices').replace(queryParameters: {'after': after, 'status_version': '2'});
       final response = await _requestClient.get(uri, headers: _headers(cfg)).timeout(const Duration(seconds: 20));
       if (response.statusCode != 200) throw StateError('Status sync failed');
       final data = jsonDecode(response.body) as Map<String, dynamic>;
@@ -217,8 +237,8 @@ class LanSyncClient {
 
   Future<String?> _drainPending(LanSyncConfig cfg) async {
     final d = await _db.db;
-    final deferredAttachmentIds = <String>{};
-    String? deferredAttachmentError;
+    final deferredIds = <String>{};
+    final deferredErrors = <String>[];
     while ((Sqflite.firstIntValue(
               await d.rawQuery(
                 "SELECT COUNT(*) FROM sales s WHERE (s.synced_at IS NULL OR s.synced_at='') AND NOT EXISTS (SELECT 1 FROM sync_outbox o WHERE o.kind='sale_upload' AND o.entity_id=s.id)",
@@ -232,13 +252,15 @@ class LanSyncClient {
       final rows = await d.query('sync_outbox', orderBy: 'seq ASC');
       Map<String, Object?>? op;
       for (final row in rows) {
-        if (!deferredAttachmentIds.contains(row['id']?.toString() ?? '')) {
+        if (!deferredIds.contains(row['id']?.toString() ?? '')) {
           op = row;
           break;
         }
       }
       if (op == null) break;
+      final current = op;
       final operationId = op['id']?.toString() ?? '';
+      if (op['delivery_state'] == 'needs_review') throw StateError('${op['last_error']}');
       try {
         if (op['kind'] == 'sale_upload') {
           await _pushSales(
@@ -265,32 +287,49 @@ class LanSyncClient {
               jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
           if (body['ok'] != true ||
               !(body['acknowledged'] as List? ?? []).contains(op['id'])) {
+            final rejected = body['rejected_operation'];
+            if (res.statusCode == 200 && op['kind'] == 'purchase_reverse' &&
+                rejected is Map && rejected['id'] == operationId &&
+                rejected['kind'] == 'purchase_reverse' &&
+                rejected['code'] == 'purchase_reverse_rejected') {
+              final error = '${body['error'] ?? 'Desktop 拒绝撤销'}';
+              final recovered = await d.transaction((txn) => rejectPurchaseReverse(txn, current, error));
+              if (recovered) {
+                deferredIds.add(operationId);
+                deferredErrors.add('进货撤销被 Desktop 拒绝，请核对；原请求已保留：$error');
+                continue;
+              }
+            }
             throw StateError('${body['error'] ?? '操作未获电脑确认'}');
           }
         }
-        await d.delete('sync_outbox', where: 'id=?', whereArgs: [op['id']]);
+        await d.transaction((txn) async {
+          if (current['kind'] == 'purchase_reverse') await acknowledgePurchaseReverse(txn, current);
+          await txn.delete('sync_outbox', where: 'id=?', whereArgs: [current['id']]);
+        });
       } catch (e) {
         await d.update(
           'sync_outbox',
-          {'last_error': '$e'},
+          {'last_error': '$e', if (op['kind'] == 'purchase_reverse') 'delivery_state': 'pending'},
           where: 'id=?',
           whereArgs: [op['id']],
         );
         lastError = '$e';
         if (op['kind'] == 'purchase_attachment') {
-          deferredAttachmentIds.add(operationId);
-          deferredAttachmentError ??= '$e';
+          deferredIds.add(operationId);
+          deferredErrors.add('进货发票原图仍待重试：$e');
           continue;
         }
         await repo.setSetting('lan_sync_last_error', '$e');
         rethrow;
       }
     }
-    if (deferredAttachmentError != null) {
-      lastError = deferredAttachmentError;
-      await repo.setSetting('lan_sync_last_error', deferredAttachmentError);
+    final deferredError = deferredErrors.isEmpty ? null : deferredErrors.join('\n');
+    if (deferredError != null) {
+      lastError = deferredError;
+      await repo.setSetting('lan_sync_last_error', deferredError);
     }
-    return deferredAttachmentError;
+    return deferredError;
   }
 
   // A cancelled upload has no net inventory effect. It can be sent in its
@@ -371,7 +410,11 @@ class LanSyncClient {
     return n;
   }
 
-  Future<String> _pullCatalog(LanSyncConfig cfg) async {
+  Future<String> _pullCatalog(
+    LanSyncConfig cfg, {
+    required bool stockMovesSupported,
+    required bool fullStockMoves,
+  }) async {
     lastError = null;
     try {
       final imagesOn = await repo.productImagesEnabled();
@@ -386,7 +429,15 @@ class LanSyncClient {
       final suppliersUri = Uri.parse('${cfg.normalizedBase}/api/v1/suppliers$q');
       final categoriesUri = Uri.parse('${cfg.normalizedBase}/api/v1/categories$q');
 
-      final responses = await Future.wait<http.Response>([
+      final stockCursor =
+          int.tryParse(await repo.getSetting('lan_sync_stock_moves_cursor')) ?? 0;
+      final stockSince = fullStockMoves ? '' : '$stockCursor';
+      final stockMovesUri = Uri.parse(
+        '${cfg.normalizedBase}/api/v1/stock-moves'
+        '${stockSince.isEmpty ? '' : '?since=$stockSince'}',
+      );
+
+      final requests = <Future<http.Response>>[
         _requestClient.get(productsUri, headers: _headers(cfg))
             .timeout(const Duration(seconds: 30)),
         _requestClient.get(customersUri, headers: _headers(cfg))
@@ -395,7 +446,12 @@ class LanSyncClient {
             .timeout(const Duration(seconds: 30)),
         _requestClient.get(categoriesUri, headers: _headers(cfg))
             .timeout(const Duration(seconds: 30)),
-      ]);
+      ];
+      if (stockMovesSupported) {
+        requests.add(_requestClient.get(stockMovesUri, headers: _headers(cfg))
+            .timeout(const Duration(seconds: 30)));
+      }
+      final responses = await Future.wait<http.Response>(requests);
 
       final pBody =
           jsonDecode(utf8.decode(responses[0].bodyBytes)) as Map<String, dynamic>;
@@ -411,16 +467,43 @@ class LanSyncClient {
       if (catBody['ok'] != true) {
         throw StateError('categories: ${catBody['error']}');
       }
+      final stockBody = stockMovesSupported
+          ? jsonDecode(utf8.decode(responses[4].bodyBytes)) as Map<String, dynamic>
+          : null;
+      if (stockBody != null && stockBody['ok'] != true) {
+        throw StateError('stock moves: ${stockBody['error']}');
+      }
+      for (final body in [pBody, cBody, sBody, catBody, if (stockBody != null) stockBody]) {
+        if (body['items'] is! List) throw const FormatException('同步响应缺少完整 items 列表，目录未变更');
+      }
 
       final products = (pBody['items'] as List?) ?? [];
       final customers = (cBody['items'] as List?) ?? [];
       final suppliers = (sBody['items'] as List?) ?? [];
       final categories = (catBody['items'] as List?) ?? [];
+      final stockMoves = (stockBody?['items'] as List?) ?? const [];
+      final catalogIsFull = since.isEmpty;
+      if (catalogIsFull) {
+        for (final snapshot in [products, customers, suppliers, categories]) {
+          final ids = <String>{};
+          for (final raw in snapshot) {
+            if (raw is! Map || raw['pc_id'] == null || '${raw['pc_id']}'.isEmpty ||
+                !ids.add('${raw['pc_id']}')) {
+              throw const FormatException('全量目录标识缺失或重复，目录未变更');
+            }
+          }
+        }
+      }
+      final nextCursor = _safeCatalogCursor(
+        since,
+        <Map<String, dynamic>>[pBody, cBody, sBody, catBody],
+        <Object?>[...products, ...customers, ...suppliers, ...categories],
+      );
       final d = await _db.db;
       await d.transaction((txn) async {
         if ((Sqflite.firstIntValue(
                       await txn.rawQuery(
-                        "SELECT COUNT(*) FROM sync_outbox WHERE kind<>'purchase_attachment'",
+                        "SELECT COUNT(*) FROM sync_outbox WHERE kind<>'purchase_attachment' AND NOT(kind='purchase_reverse' AND delivery_state='rejected')",
                       ),
                     ) ??
                     0) >
@@ -434,6 +517,16 @@ class LanSyncClient {
                 0) {
           throw StateError('本地有新操作，将在下一轮同步');
         }
+        if (fullStockMoves && stockBody != null) {
+          // The host cursor may have rolled back with a restored database.
+          // Replace the previous host-owned ledger markers before replaying
+          // the current authoritative movement snapshot, so events absent
+          // from the restored host cannot permanently block a Mobile undo.
+          await txn.delete(
+            'stock_moves',
+            where: "reason='desktop_catalog_sync' AND operator='desktop-sync'",
+          );
+        }
         for (final raw in categories) {
           await _upsertCategory(txn, Map<String, dynamic>.from(raw as Map));
         }
@@ -446,6 +539,14 @@ class LanSyncClient {
         for (final raw in suppliers) {
           await _upsertSupplier(txn, Map<String, dynamic>.from(raw as Map));
         }
+        final missingProductMappings = catalogIsFull
+            ? await _reconcileMissingCatalogRows(txn, {
+                'product': products,
+                'customer': customers,
+                'supplier': suppliers,
+                'category': categories,
+              })
+            : const <Map<String, String>>[];
         final imageJobs = <Map<String, dynamic>>[];
         for (final raw in products) {
           final m = Map<String, dynamic>.from(raw as Map);
@@ -457,21 +558,44 @@ class LanSyncClient {
             'hasImage': m['has_image'] == true && m['is_deleted'] != 1,
             'localHasImage': local.isNotEmpty && '${local.first['image_path'] ?? ''}'.isNotEmpty});
         }
+        for (final missing in missingProductMappings) {
+          final local = await txn.query(
+            'products',
+            columns: const ['image_path'],
+            where: 'id=?',
+            whereArgs: [missing['localId']],
+            limit: 1,
+          );
+          imageJobs.add({
+            'remoteId': missing['remoteId'],
+            'localId': missing['localId'],
+            'hasImage': false,
+            'localHasImage': local.isNotEmpty &&
+                '${local.single['image_path'] ?? ''}'.isNotEmpty,
+          });
+        }
+        if (stockBody != null) {
+          await _recordRemoteStockMoves(txn, stockMoves);
+          final returnedStockCursor = stockBody['cursor'];
+          final parsedStockCursor = returnedStockCursor is num
+              ? returnedStockCursor.toInt()
+              : int.tryParse('$returnedStockCursor');
+          if (parsedStockCursor != null) {
+            await txn.insert(
+              'settings',
+              {'key': 'lan_sync_stock_moves_cursor', 'value': '$parsedStockCursor'},
+              conflictAlgorithm: ConflictAlgorithm.replace,
+            );
+          }
+        }
         final queue = ProductImageSyncQueue(txn, cfg.normalizedBase);
         await queue.enqueue(imageJobs);
         if (seedImages) await queue.markSeeded();
+        await txn.insert('settings', {'key': 'lan_sync_products_cursor', 'value': nextCursor},
+          conflictAlgorithm: ConflictAlgorithm.replace);
+        await txn.insert('settings', {'key': 'lan_sync_last_pull',
+          'value': DateTime.now().toIso8601String()}, conflictAlgorithm: ConflictAlgorithm.replace);
       });
-
-      final nextCursor = _safeCatalogCursor(
-        since,
-        <Map<String, dynamic>>[pBody, cBody, sBody, catBody],
-        <Object?>[...products, ...customers, ...suppliers, ...categories],
-      );
-      await repo.setSetting('lan_sync_products_cursor', nextCursor);
-      await repo.setSetting(
-        'lan_sync_last_pull',
-        DateTime.now().toIso8601String(),
-      );
       return 'Pulled ${products.length} products, ${customers.length} customers, '
           '${suppliers.length} suppliers, ${categories.length} categories';
     } catch (e) {
@@ -501,6 +625,121 @@ class LanSyncClient {
       return '$safe';
     }
     return _nextCursor(current, bodies, rawItems);
+  }
+
+  Future<List<Map<String, String>>> _reconcileMissingCatalogRows(
+    DatabaseExecutor txn,
+    Map<String, List> snapshots,
+  ) async {
+    const tables = <String, String>{
+      'product': 'products',
+      'customer': 'customers',
+      'supplier': 'suppliers',
+      'category': 'categories',
+    };
+    final missingProducts = <Map<String, String>>[];
+    for (final entry in tables.entries) {
+      final presentIds = <String>{
+        for (final raw in snapshots[entry.key] ?? const <Object?>[])
+          if (raw is Map && raw['pc_id'] != null) '${raw['pc_id']}',
+      };
+      final mappings = await txn.query(
+        'sync_entity_ids',
+        columns: const ['remote_id', 'local_id'],
+        where: 'entity=?',
+        whereArgs: [entry.key],
+      );
+      for (final mapping in mappings) {
+        final remoteId = mapping['remote_id']?.toString() ?? '';
+        final localId = mapping['local_id']?.toString() ?? '';
+        if (remoteId.isEmpty || localId.isEmpty || presentIds.contains(remoteId)) {
+          continue;
+        }
+        final changed = await txn.update(
+          entry.value,
+          {'is_deleted': 1},
+          where: 'id=?',
+          whereArgs: [localId],
+        );
+        if (entry.key == 'product' && changed > 0) {
+          missingProducts.add({'remoteId': remoteId, 'localId': localId});
+        }
+      }
+    }
+    return missingProducts;
+  }
+
+  Future<void> _recordRemoteStockMoves(
+    DatabaseExecutor txn,
+    List<dynamic> rawMoves,
+  ) async {
+    final moves = <Map<String, dynamic>>[];
+    final latestOwnPurchaseCursor = <String, int>{};
+    for (final raw in rawMoves) {
+      if (raw is! Map) throw const FormatException('invalid stock move');
+      final move = Map<String, dynamic>.from(raw);
+      moves.add(move);
+      if (move['reason']?.toString() != 'purchase') continue;
+      final sourceId = move['source_id']?.toString() ?? '';
+      if (sourceId.isEmpty) continue;
+      final localPurchase = await txn.query(
+        'purchases',
+        columns: const ['source'],
+        where: 'id=?',
+        whereArgs: [sourceId],
+        limit: 1,
+      );
+      if (localPurchase.isEmpty ||
+          localPurchase.single['source']?.toString() == 'desktop_sync') {
+        continue;
+      }
+      final remoteProductId = move['product_id']?.toString() ?? '';
+      final localProductId =
+          await mappedLocalId(txn, 'product', remoteProductId);
+      if (localProductId == null) continue;
+      final cursorValue = move['cursor'];
+      final cursor = cursorValue is num
+          ? cursorValue.toInt()
+          : int.tryParse('$cursorValue') ?? 0;
+      if (cursor > (latestOwnPurchaseCursor[localProductId] ?? 0)) {
+        latestOwnPurchaseCursor[localProductId] = cursor;
+      }
+    }
+
+    for (final move in moves) {
+      final remoteProductId = move['product_id']?.toString() ?? '';
+      final localProductId =
+          await mappedLocalId(txn, 'product', remoteProductId);
+      if (localProductId == null) continue;
+      final cursorValue = move['cursor'];
+      final cursor = cursorValue is num
+          ? cursorValue.toInt()
+          : int.tryParse('$cursorValue') ?? 0;
+      // A full snapshot can include old Desktop activity from before an
+      // offline Mobile purchase was uploaded. Only activity after the latest
+      // matching Mobile purchase can make that purchase unsafe to reverse.
+      if (cursor <= (latestOwnPurchaseCursor[localProductId] ?? 0)) continue;
+      final deltaValue = move['change'];
+      if (deltaValue is! num || !deltaValue.isFinite) {
+        throw const FormatException('invalid stock move quantity');
+      }
+      final remoteId = move['id']?.toString() ?? '$cursor';
+      final reason = move['reason']?.toString() ?? 'unknown';
+      await txn.insert(
+        'stock_moves',
+        {
+          'id': 'desktop-stock:$remoteId',
+          'product_id': localProductId,
+          'change': deltaValue.toDouble(),
+          'reason': 'desktop_catalog_sync',
+          'created_at': move['created_at']?.toString() ??
+              DateTime.now().toIso8601String(),
+          'operator': 'desktop-sync',
+          'notes': 'Desktop $reason: ${move['notes'] ?? ''} [${move['id'] ?? cursor}]',
+        },
+        conflictAlgorithm: ConflictAlgorithm.ignore,
+      );
+    }
   }
 
   String _nextCursor(

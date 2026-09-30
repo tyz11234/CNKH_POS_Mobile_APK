@@ -579,6 +579,8 @@ class PurchaseOcrRepository {
           'unit': line.unit,
           'conversionFactor': line.conversionFactor,
           'unitCostCents': baseCost,
+          'productSku': rows.first['sku'],
+          'productBarcode': rows.first['barcode'],
           'invoiceUnitCostCents': line.unitCostCents,
           'subtotalCents': line.lineSubtotalCents,
           'beforeCostCents': beforeCost,
@@ -594,6 +596,13 @@ class PurchaseOcrRepository {
         });
       }
 
+      final supplierRows = await txn.query(
+        'suppliers',
+        columns: const ['phone'],
+        where: 'id=?',
+        whereArgs: [draft.supplierId],
+        limit: 1,
+      );
       await queueMutation(txn, 'purchase', purchaseId, {
         'id': purchaseId,
         'purchase_no': purchaseNo,
@@ -601,6 +610,7 @@ class PurchaseOcrRepository {
         'supplier_id':
             await remoteEntityId(txn, 'supplier', draft.supplierId!),
         'supplier_name': draft.supplierName,
+        'supplier_phone': supplierRows.isEmpty ? '' : supplierRows.single['phone'],
         'invoice_no': draft.invoiceNo,
         'invoice_date': draft.invoiceDate,
         'lines': remoteLines,
@@ -841,10 +851,38 @@ class PurchaseOcrRepository {
         whereArgs: [purchaseId],
         limit: 1,
       )).isNotEmpty) return;
+      if ((await txn.query('sync_outbox', columns: ['id'],
+        where: "kind='purchase_reverse' AND entity_id=?", whereArgs: [purchaseId], limit: 1)).isNotEmpty) {
+        throw StateError('撤销请求已保留在同步队列，请同步并核对 Desktop 返回结果');
+      }
 
       final purchaseNo = purchase['purchase_no']?.toString() ?? '';
       final now = DateTime.now().toIso8601String();
       final planned = await planPurchaseReverse(txn, purchase);
+      final paired = (await readSetting(txn, 'lan_sync_host')).trim().isNotEmpty;
+      final localPlan = <Map<String, Object?>>[];
+      for (final change in planned) {
+        final product = (await txn.query('products', columns: ['cost_cents'],
+          where: 'id=?', whereArgs: [change.productId], limit: 1)).single;
+        final cost = (product['cost_cents'] as num).toInt();
+        localPlan.add({'product_id': change.productId, 'quantity': change.quantity,
+          'before_cost': cost, 'after_cost': change.restoreCost ?? cost});
+      }
+      final payload = <String, Object?>{
+        'purchase_id': purchaseId, 'purchase_no': purchase['purchase_no'],
+        'reason': reason, 'notes': notes, 'operator': operator,
+        'local_applied': !paired, 'local_reverse_plan': localPlan,
+      };
+      if (paired) {
+        await queueMutation(txn, 'purchase_reverse', purchaseId, payload);
+        await txn.insert('purchase_audit_log', {
+          'id': AppDatabase.newId(), 'purchase_id': purchaseId, 'occurred_at': now,
+          'username': operator, 'action': 'purchase_reverse_requested',
+          'field_name': 'status', 'original_value': 'committed', 'final_value': 'awaiting_desktop',
+          'details': '$reason${notes.isEmpty ? '' : ': $notes'}',
+        });
+        return;
+      }
 
       for (final change in planned) {
         final productId = change.productId;
@@ -872,13 +910,7 @@ class PurchaseOcrRepository {
         });
       }
 
-      await queueMutation(txn, 'purchase_reverse', purchaseId, {
-        'purchase_id': purchaseId,
-        'purchase_no': purchase['purchase_no'],
-        'reason': reason,
-        'notes': notes,
-        'operator': operator,
-      });
+      await queueMutation(txn, 'purchase_reverse', purchaseId, payload);
       await txn.insert('purchase_reversals', {
         'id': AppDatabase.newId(),
         'purchase_id': purchaseId,

@@ -174,7 +174,10 @@ Future<void> queueMutation(
   String entityId,
   Map<String, Object?> payload,
 ) async {
-  if (isDesktopHost || (await readSetting(db, 'lan_sync_host')).isEmpty) return;
+  // A local operation is durable even before the first Desktop pairing. The
+  // first successful connection drains this Outbox before applying the host's
+  // catalog, so offline purchases/sales cannot be overwritten by initial sync.
+  if (isDesktopHost) return;
   final effectivePayload = kind == 'purchase'
       ? await _annotateApprovedDuplicatePurchase(db, payload)
       : payload;

@@ -10,7 +10,7 @@ class EInvoiceStatusStore {
       for (final key in ['document_id','sale_id','receipt_no','environment','status','updated_at']) {
         if (row[key] is! String) throw const FormatException('Invalid e-Invoice status response');
       }
-      if (!['sandbox','production'].contains(row['environment']) || !['pending','submitting','submitted','validated','rejected','cancelled','needs_review'].contains(row['status'])) throw const FormatException('Unknown e-Invoice status');
+      if (!['sandbox','production'].contains(row['environment']) || !['pending','submitting','submitted','validated','rejected','invalid','cancelled','needs_review'].contains(row['status'])) throw const FormatException('Unknown e-Invoice status');
       accepted.add({'host': host, for (final key in ['document_id','sale_id','receipt_no','environment','status','updated_at']) key: row[key], 'client_sale_id': row['client_sale_id'] is String ? row['client_sale_id'] : ''});
     }
     await db.transaction((txn) async {

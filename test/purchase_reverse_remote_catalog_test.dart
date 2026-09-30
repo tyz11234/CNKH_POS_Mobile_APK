@@ -36,14 +36,16 @@ void main() {
       final repo = PosRepository(database: database);
       var purchaseUploads = 0;
       var saleUploads = 0;
+      var purchaseId = '';
       final client = MockClient((request) async {
         if (request.method == 'GET' && request.url.path == '/api/v1/health') {
           return jsonResponse({
             'ok': true,
             'protocol': 1,
             'cursor': 42,
+            'stock_moves_cursor': 42,
             'stock_policy': 'desktop',
-            'capabilities': ['mutations_v1'],
+            'capabilities': ['mutations_v1', 'stock_moves_v1'],
           });
         }
         if (request.method == 'POST' &&
@@ -75,6 +77,34 @@ void main() {
                 'is_deleted': 0,
                 'reorder_level': 0,
                 'has_image': false,
+              },
+            ],
+          });
+        }
+        if (request.method == 'GET' && request.url.path == '/api/v1/stock-moves') {
+          return jsonResponse({
+            'ok': true,
+            'cursor': 42,
+            'items': [
+              {
+                'cursor': 41,
+                'id': 'remote-mobile-purchase',
+                'product_id': 'p1',
+                'change': 5.0,
+                'reason': 'purchase',
+                'notes': 'remote purchase',
+                'created_at': '2026-09-26T09:00:00Z',
+                'source_id': purchaseId,
+              },
+              {
+                'cursor': 42,
+                'id': 'remote-stock-change',
+                'product_id': 'p1',
+                'change': -1.0,
+                'reason': 'sale',
+                'notes': 'PC-SALE-1',
+                'created_at': '2026-09-26T10:00:00Z',
+                'source_id': 'remote-sale-1',
               },
             ],
           });
@@ -136,6 +166,7 @@ void main() {
             },
           ],
         );
+        purchaseId = (await db.query('purchases')).single['id'] as String;
 
         final sync = LanSyncClient(
           repo,

@@ -10,6 +10,11 @@ on:
       - main
       - source/main
   workflow_dispatch:
+    inputs:
+      desktop_ref:
+        description: Desktop branch/tag/SHA to pair with this Mobile ref
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -25,11 +30,25 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           path: CNKH_POS_Mobile_APK
 
+      - name: Select paired Desktop source
+        id: companion
+        env:
+          REQUESTED_REF: ${{ github.event.inputs.desktop_ref }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          paired_ref="$REQUESTED_REF"
+          if [[ -z "$paired_ref" ]]; then
+            paired_ref=$(tr -d '\r\n' < CNKH_POS_Mobile_APK/.github/paired-desktop-ref)
+          fi
+          [[ "$paired_ref" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]]
+          echo "ref=$paired_ref" >> "$GITHUB_OUTPUT"
+
       - name: Checkout release-paired Desktop companion
         uses: actions/checkout@v4
         with:
           repository: tyz11234/CNKH_POS_Desktop
-          ref: 02e3574b16d45bf0e13f89f5f1d1b42f50bfa3f3
+          ref: ${{ steps.companion.outputs.ref }}
           path: CNKH_POS_Desktop
 
       - name: Record exact paired source SHAs
@@ -38,7 +57,7 @@ jobs:
           set -euo pipefail
           echo "Mobile ref: ${{ github.event.pull_request.head.ref || github.ref_name }}"
           echo "Mobile SHA: $(git -C CNKH_POS_Mobile_APK rev-parse HEAD)"
-          echo "Desktop ref: 02e3574b16d45bf0e13f89f5f1d1b42f50bfa3f3"
+          echo "Desktop ref: ${{ steps.companion.outputs.ref }}"
           echo "Desktop SHA: $(git -C CNKH_POS_Desktop rev-parse HEAD)"
 
       - name: Setup Flutter

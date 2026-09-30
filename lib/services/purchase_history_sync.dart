@@ -94,6 +94,7 @@ class PurchaseHistorySync {
     final db = await _db.db;
     await ensureOcrPurchaseSchema(db);
     var changed = 0;
+    var deferredLocalOperation = false;
     await db.transaction((txn) async {
       for (final raw in body['items'] as List) {
         if (raw is! Map) continue;
@@ -138,6 +139,16 @@ class PurchaseHistorySync {
             existing['id']?.toString() == remoteId &&
             existing['source']?.toString() != 'desktop_sync';
         localId ??= 'pc-p-$remoteId';
+        if (isLocalOrigin && (await txn.query('sync_outbox', columns: ['id'],
+          where: "entity_id=? AND kind IN ('purchase','purchase_reverse') AND delivery_state<>'rejected'",
+          whereArgs: [localId], limit: 1)).isNotEmpty) {
+          // History can arrive through its independent coordinator while an
+          // upload/ACK is still outstanding. Keep local lines, cost snapshots,
+          // and reversal state until the business operation is confirmed.
+          await rememberEntityId(txn, 'purchase', remoteId, localId);
+          deferredLocalOperation = true;
+          continue;
+        }
         await rememberEntityId(txn, 'purchase', remoteId, localId);
 
         final supplierId = await _localEntityId(
@@ -257,20 +268,18 @@ class PurchaseHistorySync {
         }
         changed++;
       }
+      final cursor = body['cursor'];
+      if (!deferredLocalOperation && cursor != null) {
+        await txn.insert('settings', {'key': 'lan_sync_purchases_cursor', 'value': '$cursor'},
+          conflictAlgorithm: ConflictAlgorithm.replace);
+      }
+      await txn.insert('settings', {'key': 'lan_sync_last_purchase_pull',
+        'value': DateTime.now().toUtc().toIso8601String()}, conflictAlgorithm: ConflictAlgorithm.replace);
     });
-
-    final cursor = body['cursor'];
-    if (cursor != null) {
-      await repo.setSetting('lan_sync_purchases_cursor', '$cursor');
-    }
-    await repo.setSetting(
-      'lan_sync_last_purchase_pull',
-      DateTime.now().toUtc().toIso8601String(),
-    );
     return PurchaseHistoryPullResult(
       supported: true,
       changed: changed,
-      message: 'Pulled $changed purchases',
+      message: 'Pulled $changed purchases${deferredLocalOperation ? '；手机待确认业务已保留，下轮重试历史' : ''}',
     );
   }
 
