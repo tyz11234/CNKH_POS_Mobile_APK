@@ -41,7 +41,7 @@ void main() {
       // Preserve legacy IDs and attachments; no rewrite of old draft identity.
       await db.update('purchase_draft_lines', {'id': 'ocr-line-2'},
           where: 'draft_id=?', whereArgs: ['two']);
-      await db.setVersion(9); await database.close();
+      await db.execute('PRAGMA user_version = 9'); await database.close();
       final upgraded = await database.db;
       await ensureOcrPurchaseSchema(upgraded); await ensureOcrPurchaseSchema(upgraded);
       final old = (await ocr.loadDraft('two'))!;

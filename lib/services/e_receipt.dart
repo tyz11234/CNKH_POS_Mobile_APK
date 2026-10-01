@@ -278,7 +278,7 @@ Future<int> clearEReceiptCache({PosRepository? repo}) async =>
 Future<int> countEReceiptCache({PosRepository? repo}) async =>
     OwnedReceiptCache(await eReceiptCacheDir(repo: repo)).ownedFiles().length;
 
-/// Write PDF into private cache. Filename is stable per receipt.
+/// Write a uniquely named PDF into the owned cache.
 /// Does **not** delete after share — purge old files on startup / explicitly.
 Future<File> writeReceiptPdfCached(
   SaleRecord sale, {
