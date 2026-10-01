@@ -64,6 +64,10 @@ Future<void> rememberEntityId(
   if (previous.isNotEmpty && previous.first['remote_id'] != '$remoteId') {
     throw StateError('商品或客户关联冲突，请核对重复资料');
   }
+  final remote = await mappedLocalId(db, entity, remoteId);
+  if (remote != null && remote != localId) {
+    throw StateError('历史远端实体已经关联到其他本地记录，不能重绑');
+  }
   await db.insert('sync_entity_ids', {
     'entity': entity,
     'remote_id': '$remoteId',

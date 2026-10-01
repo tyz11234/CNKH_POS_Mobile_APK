@@ -59,7 +59,7 @@ class PurchaseInvoiceParser {
       }
       if (_looksLikeHeader(lower) || _isSubtotal(lower)) continue;
 
-      final parsed = _parseProductLine(line, i);
+      final parsed = _parseProductLine(line, i, draftId);
       if (parsed != null) parsedLines.add(parsed);
     }
 
@@ -102,7 +102,7 @@ class PurchaseInvoiceParser {
     );
   }
 
-  PurchaseDraftLine? _parseProductLine(String line, int index) {
+  PurchaseDraftLine? _parseProductLine(String line, int index, String draftId) {
     final normalized = line
         .replaceAll(RegExp(r'\s+'), ' ')
         .replaceAll(RegExp(r'\bRM\s*', caseSensitive: false), 'RM');
@@ -124,7 +124,7 @@ class PurchaseInvoiceParser {
     }
 
     return PurchaseDraftLine(
-      id: 'ocr-line-$index',
+      id: 'ocr:${draftId.length}:$draftId:line:$index',
       rawText: line,
       rawProductName: name,
       quantity: qty,
