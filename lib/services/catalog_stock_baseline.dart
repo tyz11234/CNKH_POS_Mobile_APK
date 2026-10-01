@@ -27,7 +27,9 @@ Future<bool> isProvenInitialStockBaseline(DatabaseExecutor txn, {
   final confirmed = <String, double>{};
   for (final raw in fullMoves) {
     if (raw is! Map || raw['reason'] != 'purchase' ||
-        raw['product_id']?.toString() != remoteProductId) continue;
+        raw['product_id']?.toString() != remoteProductId) {
+      continue;
+    }
     final id = raw['source_id']?.toString() ?? '';
     final change = raw['change'];
     if (!quantities.containsKey(id) || change is! num || !change.isFinite || change <= 0) continue;

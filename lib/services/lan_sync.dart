@@ -783,7 +783,8 @@ class LanSyncClient {
   ) async {
     final sku = (m['sku'] as String?) ?? '';
     final barcode = (m['barcode'] as String?) ?? '';
-    final pcId = m['pc_id'];
+    final pcId = m['pc_id']?.toString() ?? '';
+    if (pcId.isEmpty) throw const FormatException('商品目录缺少身份 ID');
     Map<String, Object?>? existing;
     final mapped = await mappedLocalId(txn, 'product', pcId);
     if (mapped != null) {
@@ -797,7 +798,7 @@ class LanSyncClient {
     final deleted = (m['is_deleted'] as num?)?.toInt() ?? 0;
     // A tombstone refers only to its immutable Desktop ID. Reused codes must
     // never cause an older tombstone to delete a newly-created entity.
-    if (existing == null && pcId != null) {
+    if (existing == null) {
       final rows = await txn.rawQuery('''
         SELECT p.* FROM products p WHERE p.id IN (?,?)
         AND NOT EXISTS(SELECT 1 FROM sync_entity_ids e WHERE e.entity='product'
@@ -1399,7 +1400,15 @@ class LanSyncClient {
           customerId ??= existing.isEmpty
               ? null
               : existing.first['customer_id'] as String?;
-          final lines = m['lines'] ?? [];
+          final lines = <Map<String, Object?>>[];
+          for (final raw in m['lines'] as List? ?? const []) {
+            final line = Map<String, Object?>.from(raw as Map);
+            final remoteId = (line['productId'] ?? line['product_id'])?.toString() ?? '';
+            // Use the immutable mapping even for soft-deleted products. A
+            // receipt round trip must not replace its historical local ID.
+            lines.add({...line, 'productId':
+                await mappedLocalId(txn, 'product', remoteId) ?? remoteId});
+          }
           final total = (m['total_cents'] as num?)?.toInt() ?? 0;
           final paid = (m['paid_cents'] as num?)?.toInt() ?? total;
           final payment = m['payment_method']?.toString() ?? 'CASH';
