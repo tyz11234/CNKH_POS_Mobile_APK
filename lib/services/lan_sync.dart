@@ -803,7 +803,7 @@ class LanSyncClient {
         SELECT p.* FROM products p WHERE p.id IN (?,?)
         AND NOT EXISTS(SELECT 1 FROM sync_entity_ids e WHERE e.entity='product'
           AND e.local_id=p.id AND e.remote_id<>?)
-      ''', ['pc-$pcId', '$pcId', '$pcId']);
+      ''', ['pc-$pcId', pcId, pcId]);
       if (rows.length > 1) throw StateError('同步商品 ID 存在重复资料');
       if (rows.isNotEmpty) existing = rows.single;
     }
@@ -814,7 +814,7 @@ class LanSyncClient {
           SELECT p.* FROM products p WHERE p.$column=? AND p.is_deleted=0
           AND NOT EXISTS(SELECT 1 FROM sync_entity_ids e WHERE e.entity='product'
             AND e.local_id=p.id AND e.remote_id<>?) LIMIT 2
-        ''', [value, '$pcId']);
+        ''', [value, pcId]);
         if (rows.length > 1) throw StateError('同步匹配存在重复资料');
         return rows.isEmpty ? null : rows.single;
       }
@@ -861,7 +861,7 @@ class LanSyncClient {
     final firstCatalog = (await readSetting(txn, seenKey)).isEmpty &&
         (mapped == null || (await readSetting(txn, 'lan_sync_products_cursor')).isEmpty);
     final baseline = firstCatalog && fullMoves != null &&
-        await isProvenInitialStockBaseline(txn, remoteProductId: '$pcId',
+        await isProvenInitialStockBaseline(txn, remoteProductId: pcId,
             localProductId: id, fullMoves: fullMoves);
     await txn.insert('settings', {'key': seenKey, 'value': '1'},
         conflictAlgorithm: ConflictAlgorithm.replace);
