@@ -1,3 +1,4 @@
+import 'catalog_stock_baseline.dart';
 import 'einvoice/einvoice_status_store.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -277,6 +278,7 @@ class LanSyncClient {
                     {
                       'id': op['id'],
                       'kind': op['kind'],
+                      'client_entity_id': op['entity_id'],
                       'payload': jsonDecode(op['payload_json'] as String),
                     },
                   ],
@@ -302,6 +304,16 @@ class LanSyncClient {
             }
             throw StateError('${body['error'] ?? '操作未获电脑确认'}');
           }
+          await d.transaction((txn) async {
+            for (final raw in body['entity_mappings'] as List? ?? const []) {
+              if (raw is! Map || raw['entity'] != 'product' ||
+                  raw['local_id'] != current['entity_id'] ||
+                  '${raw['remote_id'] ?? ''}'.isEmpty) {
+                throw StateError('商品关联 ACK 无效，原请求保留');
+              }
+              await rememberEntityId(txn, 'product', raw['remote_id'], raw['local_id'] as String);
+            }
+          });
         }
         await d.transaction((txn) async {
           if (current['kind'] == 'purchase_reverse') await acknowledgePurchaseReverse(txn, current);
@@ -531,7 +543,8 @@ class LanSyncClient {
           await _upsertCategory(txn, Map<String, dynamic>.from(raw as Map));
         }
         for (final raw in products) {
-          await _upsertProduct(txn, Map<String, dynamic>.from(raw as Map));
+          await _upsertProduct(txn, Map<String, dynamic>.from(raw as Map),
+              fullMoves: stockBody != null && (fullStockMoves || stockCursor == 0) ? stockMoves : null);
         }
         for (final raw in customers) {
           await _upsertCustomer(txn, Map<String, dynamic>.from(raw as Map));
@@ -766,11 +779,12 @@ class LanSyncClient {
 
   Future<void> _upsertProduct(
     DatabaseExecutor txn,
-    Map<String, dynamic> m,
+    Map<String, dynamic> m, {List<dynamic>? fullMoves}
   ) async {
     final sku = (m['sku'] as String?) ?? '';
     final barcode = (m['barcode'] as String?) ?? '';
-    final pcId = m['pc_id'];
+    final pcId = m['pc_id']?.toString() ?? '';
+    if (pcId.isEmpty) throw const FormatException('商品目录缺少身份 ID');
     Map<String, Object?>? existing;
     final mapped = await mappedLocalId(txn, 'product', pcId);
     if (mapped != null) {
@@ -781,38 +795,37 @@ class LanSyncClient {
       );
       if (rows.isNotEmpty) existing = rows.first;
     }
-    if (existing == null && barcode.isNotEmpty) {
-      final rows = await txn.query(
-        'products',
-        where: 'barcode=?',
-        whereArgs: [barcode],
-        limit: 2,
-      );
-      if (rows.length > 1) throw StateError('同步匹配存在重复资料');
-      if (rows.isNotEmpty) existing = rows.first;
+    final deleted = (m['is_deleted'] as num?)?.toInt() ?? 0;
+    // A tombstone refers only to its immutable Desktop ID. Reused codes must
+    // never cause an older tombstone to delete a newly-created entity.
+    if (existing == null) {
+      final rows = await txn.rawQuery('''
+        SELECT p.* FROM products p WHERE p.id IN (?,?)
+        AND NOT EXISTS(SELECT 1 FROM sync_entity_ids e WHERE e.entity='product'
+          AND e.local_id=p.id AND e.remote_id<>?)
+      ''', ['pc-$pcId', pcId, pcId]);
+      if (rows.length > 1) throw StateError('同步商品 ID 存在重复资料');
+      if (rows.isNotEmpty) existing = rows.single;
     }
-    if (existing == null && sku.isNotEmpty) {
-      final rows = await txn.query(
-        'products',
-        where: 'sku=?',
-        whereArgs: [sku],
-        limit: 2,
-      );
-      if (rows.length > 1) throw StateError('同步匹配存在重复资料');
-      if (rows.isNotEmpty) existing = rows.first;
-    }
-    if (existing == null && pcId != null) {
-      final rows = await txn.query(
-        'products',
-        where: 'id IN (?,?)',
-        whereArgs: ['pc-$pcId', '$pcId'],
-        limit: 2,
-      );
-      if (rows.length > 1) throw StateError('同步匹配存在重复资料');
-      if (rows.isNotEmpty) existing = rows.first;
+    if (existing == null && deleted == 0) {
+      Future<Map<String, Object?>?> candidate(String column, String value) async {
+        if (value.isEmpty) return null;
+        final rows = await txn.rawQuery('''
+          SELECT p.* FROM products p WHERE p.$column=? AND p.is_deleted=0
+          AND NOT EXISTS(SELECT 1 FROM sync_entity_ids e WHERE e.entity='product'
+            AND e.local_id=p.id AND e.remote_id<>?) LIMIT 2
+        ''', [value, pcId]);
+        if (rows.length > 1) throw StateError('同步匹配存在重复资料');
+        return rows.isEmpty ? null : rows.single;
+      }
+      final byBarcode = await candidate('barcode', barcode);
+      final bySku = await candidate('sku', sku);
+      if (byBarcode != null && bySku != null && byBarcode['id'] != bySku['id']) {
+        throw StateError('商品 SKU 与条码分别匹配不同实体，目录保留供核对');
+      }
+      existing = byBarcode ?? bySku;
     }
 
-    final deleted = (m['is_deleted'] as num?)?.toInt() ?? 0;
     if (deleted != 0) {
       if (existing != null) {
         await txn.update(
@@ -844,6 +857,14 @@ class LanSyncClient {
       reorderLevel: (m['reorder_level'] as num?)?.toDouble() ?? 0,
     );
     final previousStock = (existing?['stock'] as num?)?.toDouble();
+    final seenKey = 'lan_product_catalog_seen:$pcId';
+    final firstCatalog = (await readSetting(txn, seenKey)).isEmpty &&
+        (mapped == null || (await readSetting(txn, 'lan_sync_products_cursor')).isEmpty);
+    final baseline = firstCatalog && fullMoves != null &&
+        await isProvenInitialStockBaseline(txn, remoteProductId: pcId,
+            localProductId: id, fullMoves: fullMoves);
+    await txn.insert('settings', {'key': seenKey, 'value': '1'},
+        conflictAlgorithm: ConflictAlgorithm.replace);
     await txn.insert(
       'products',
       product.toMap(),
@@ -857,10 +878,10 @@ class LanSyncClient {
         'id': AppDatabase.newId(),
         'product_id': id,
         'change': product.stock - previousStock,
-        'reason': 'desktop_catalog_sync',
+        'reason': baseline ? 'desktop_catalog_baseline' : 'desktop_catalog_sync',
         'created_at': DateTime.now().toIso8601String(),
         'operator': 'desktop-sync',
-        'notes': 'Desktop catalog stock reconciliation',
+        'notes': baseline ? 'Verified initial Desktop stock baseline' : 'Desktop catalog stock reconciliation',
       });
     }
   }
@@ -1379,7 +1400,15 @@ class LanSyncClient {
           customerId ??= existing.isEmpty
               ? null
               : existing.first['customer_id'] as String?;
-          final lines = m['lines'] ?? [];
+          final lines = <Map<String, Object?>>[];
+          for (final raw in m['lines'] as List? ?? const []) {
+            final line = Map<String, Object?>.from(raw as Map);
+            final remoteId = (line['productId'] ?? line['product_id'])?.toString() ?? '';
+            // Use the immutable mapping even for soft-deleted products. A
+            // receipt round trip must not replace its historical local ID.
+            lines.add({...line, 'productId':
+                await mappedLocalId(txn, 'product', remoteId) ?? remoteId});
+          }
           final total = (m['total_cents'] as num?)?.toInt() ?? 0;
           final paid = (m['paid_cents'] as num?)?.toInt() ?? total;
           final payment = m['payment_method']?.toString() ?? 'CASH';

@@ -92,7 +92,7 @@ Future<List<PurchaseReversePlan>> planPurchaseReverse(
           throw StateError(kUnsafePurchaseReverseMessage);
         }
         purchasedQuantity += delta;
-      } else if (foundPurchase) {
+      } else if (foundPurchase && move['reason'] != 'desktop_catalog_baseline') {
         throw StateError(kUnsafePurchaseReverseMessage);
       }
     }
