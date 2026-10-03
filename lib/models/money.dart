@@ -1,6 +1,16 @@
 /// Integer-cent money helpers (sen). Never store MYR as binary float.
 int rmToCents(double rm) => (rm * 100).round();
 
+/// Invalid pasted values must never reach rounding or sale persistence.
+/// Stay within the exact integer range shared by native and web Dart.
+int? tryParseRmCents(String text) {
+  final value = double.tryParse(text.trim().replaceAll(',', ''));
+  if (value == null || !value.isFinite) return null;
+  final cents = value * 100;
+  if (!cents.isFinite || cents.abs() > 9007199254740991) return null;
+  return cents.round();
+}
+
 double centsToRm(int cents) => cents / 100.0;
 
 String formatRm(int cents) {
