@@ -38,6 +38,9 @@ jobs:
       - name: Analyze
         run: flutter analyze --no-fatal-infos --no-fatal-warnings
 
+      - name: Install PDF metadata tools
+        run: sudo apt-get update && sudo apt-get install -y poppler-utils
+
       - name: Test
         run: flutter test
 

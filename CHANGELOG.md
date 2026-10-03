@@ -1,6 +1,6 @@
 # CNKH POS Mobile change log
 
-## 1.10.8+36 — source published; APK pending matching signing key
+## 1.10.8+36 — unreleased (APK pending matching signing key)
 
 - **B01** Clear a previous customer-directory phone on customer change/cancel while preserving a manually entered temporary number for the saved sale and eReceipt recipient.
 - **B02** Reuse compatible supplier OCR unit conversion memory and keep base-unit stock/cost values in the purchase sync payload; require review for unit conflicts and honor manual edits.
