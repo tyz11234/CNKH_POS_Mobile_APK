@@ -14,7 +14,13 @@
 
 ## 验证与发布状态
 
-Mobile 完整 Flutter 测试 **145 项通过**；本地静态分析没有 error，但仍有 info/warning 诊断。MyInvois R02 签名变更不在本版范围；官方要求与独立 verifier 尚待复核，未执行真实 Sandbox / Production 提交或作废。
+Mobile CI **145 项测试通过**，分析与培训资源校验通过。Windows 1.10.8+36 Release **149 项测试通过**，Windows 构建、资源校验与 ZIP 上传成功。运行记录见 [Mobile CI](https://github.com/tyz11234/CNKH_POS_Mobile_APK/actions/runs/37114494489)、[Windows Release](https://github.com/tyz11234/CNKH_POS_Desktop/actions/runs/37115653774) 和 [双端 HTTP 回归](https://github.com/tyz11234/CNKH_POS_Mobile_APK/actions/runs/37114494494)。
 
-**Android APK 暂未发布。** 当前 1.10.7 APK 使用 Android Debug 签名证书，仓库没有对应私钥。换用新签名会导致 Android 无法覆盖安装旧版；卸载可能清除本地业务数据。旧 APK 与校验文件仍在 [1.10.7-mobile Release](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/tag/v1.10.7-mobile)。
+MyInvois R02 签名变更不在本版范围；官方要求与独立 verifier 尚待复核，未执行真实 Sandbox / Production 提交或作废。
+
+**Android 1.10.8+36 APK 尚未发布。** 已发布的 1.10.7 APK 使用 Android Debug 签名证书，仓库没有对应私钥。换用新签名会导致 Android 无法覆盖安装旧版；卸载可能清除本地业务数据。旧 APK 与校验文件仍在 [1.10.7-mobile Release](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/tag/v1.10.7-mobile)。
+
+## 当前下载
+
+Windows ZIP： [CNKH_POS_Desktop-windows-x64-v1.10.8-36.zip](https://github.com/tyz11234/CNKH_POS_Desktop/releases/download/v1.10.8/CNKH_POS_Desktop-windows-x64-v1.10.8-36.zip)，SHA-256：f114693cb0633b6ab46a0d5e7ae32885be4bcc0780971c3ce8fe603fc3fc73c6。Windows ZIP 是便携包，不含安装向导。
 
