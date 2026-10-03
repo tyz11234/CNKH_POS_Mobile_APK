@@ -20,6 +20,8 @@ class CartScreen extends StatefulWidget {
   final VoidCallback onChanged;
   final VoidCallback onCheckout;
   final Future<void> Function() onHold;
+  final bool isHolding;
+  final int refreshToken;
   final Future<void> Function() onResume;
   final void Function(LanSyncConfig config)? onPairing;
 
@@ -31,6 +33,8 @@ class CartScreen extends StatefulWidget {
     required this.onChanged,
     required this.onCheckout,
     required this.onHold,
+    this.isHolding = false,
+    this.refreshToken = 0,
     required this.onResume,
     this.onPairing,
   });
@@ -66,6 +70,36 @@ class _CartScreenState extends State<CartScreen> {
   }
 
   @override
+  void didUpdateWidget(covariant CartScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.refreshToken != widget.refreshToken) {
+      _refreshDirectory();
+    }
+  }
+
+  Future<void> _refreshDirectory() async {
+    final results = await Future.wait<Object>([
+      widget.repo.listCategories(),
+      widget.repo.productImagesEnabled(),
+    ]);
+    if (!mounted) return;
+    final categories = results[0] as List<Category>;
+    final imagesOn = results[1] as bool;
+    final categoryStillExists =
+        _category.isEmpty ||
+        categories.any((category) => category.name == _category);
+    setState(() {
+      _categories = categories;
+      _imagesOn = imagesOn;
+      if (!categoryStillExists) _category = '';
+    });
+    // CartItem.product is a checkout-time price snapshot. Refresh the catalog
+    // shown in the product grid without repricing existing cart lines or
+    // clearing their discounts.
+    await _reload(_search.text);
+  }
+
+  @override
   void dispose() {
     _search.removeListener(_onSearchChanged);
     _search.dispose();
@@ -79,11 +113,12 @@ class _CartScreenState extends State<CartScreen> {
 
   Future<void> _reload(String q) async {
     final request = ++_productRequest;
-    if (mounted)
+    if (mounted) {
       setState(() {
         _loading = true;
         _productError = null;
       });
+    }
     try {
       final list = await widget.repo.searchProducts(
         q,
@@ -411,7 +446,7 @@ class _CartScreenState extends State<CartScreen> {
                         children: [
                           Flexible(
                             child: OutlinedButton.icon(
-                              onPressed: cart.items.isEmpty
+                              onPressed: cart.items.isEmpty || widget.isHolding
                                   ? null
                                   : widget.onHold,
                               icon: const Icon(

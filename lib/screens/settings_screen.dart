@@ -7,8 +7,10 @@ import 'package:image_picker/image_picker.dart';
 
 import '../models/app_user.dart';
 import '../services/pos_repository.dart';
+import '../app_release_notes.dart';
 import '../services/qr_storage.dart';
 import '../services/lan_sync.dart';
+import '../services/sync_store.dart';
 import '../services/e_receipt.dart';
 import '../theme/cnkh_theme.dart';
 import '../widgets/receipt_template_editor.dart';
@@ -47,6 +49,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String _cacheCustom = '';
   String _cacheDefault = '';
   bool _resetBusy = false;
+  List<Map<String, Object?>> _saleVoidReview = [];
 
   bool get canEdit => widget.user.canEditQr;
 
@@ -61,17 +64,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final host = await widget.repo.getSetting('lan_sync_host');
     final token = await widget.repo.getSetting('lan_sync_token');
     final last = await widget.repo.getSetting('lan_sync_last_full');
-    final stock = await widget.repo.getSetting('stock_policy', fallback: 'warn');
-    final holdMin =
-        await widget.repo.getSetting('hold_timeout_minutes', fallback: '30');
-    final scanFb =
-        await widget.repo.getSetting('scan_feedback', fallback: 'beep');
-    final thr =
-        await widget.repo.getSetting('low_stock_threshold', fallback: '10');
+    final stock = await widget.repo.getSetting(
+      'stock_policy',
+      fallback: 'warn',
+    );
+    final holdMin = await widget.repo.getSetting(
+      'hold_timeout_minutes',
+      fallback: '30',
+    );
+    final scanFb = await widget.repo.getSetting(
+      'scan_feedback',
+      fallback: 'beep',
+    );
+    final thr = await widget.repo.getSetting(
+      'low_stock_threshold',
+      fallback: '10',
+    );
     final bt = await widget.repo.btPrinterEnabled();
     final imgs = await widget.repo.productImagesEnabled();
-    final custom =
-        (await widget.repo.getSetting(kEReceiptCacheDirKey)).trim();
+    final pendingSaleVoids = await listSaleVoidNeedsReview(
+      await widget.repo.database.db,
+    );
+    final custom = (await widget.repo.getSetting(kEReceiptCacheDirKey)).trim();
     final def = await defaultEReceiptCachePath();
     final active = await eReceiptCacheDir(repo: widget.repo);
     if (!mounted) return;
@@ -82,14 +96,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _lastSync = last;
       _stockPolicy = stock == 'block' ? 'block' : 'warn';
       _holdTimeout.text = holdMin;
-      _scanFeedback =
-          (scanFb == 'vibrate' || scanFb == 'mute') ? scanFb : 'beep';
+      _scanFeedback = (scanFb == 'vibrate' || scanFb == 'mute')
+          ? scanFb
+          : 'beep';
       _lowStock.text = thr;
       _btEnabled = bt;
       _imagesEnabled = imgs;
       _cacheCustom = custom;
       _cacheDefault = def;
       _cachePathDisplay = active.path;
+      _saleVoidReview = pendingSaleVoids;
       _loading = false;
     });
   }
@@ -98,20 +114,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (!canEdit) return;
     try {
       final picker = ImagePicker();
-      final file =
-          await picker.pickImage(source: ImageSource.gallery, imageQuality: 95);
+      final file = await picker.pickImage(
+        source: ImageSource.gallery,
+        imageQuality: 95,
+      );
       if (file == null) return;
       final saved = await widget.qrStorage.saveFromPicker(file.path);
       if (!mounted) return;
       setState(() => _path = saved);
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('已保存本机 DuitNow QR')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('已保存本机 DuitNow QR')));
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-            content: Text('导入失败: $e'), backgroundColor: CnkhColors.danger),
+        SnackBar(content: Text('导入失败: $e'), backgroundColor: CnkhColors.danger),
       );
     }
   }
@@ -133,9 +150,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   LanSyncConfig get _cfg => LanSyncConfig(
-        baseUrl: _syncHost.text.trim(),
-        token: _syncToken.text.trim(),
-      );
+    baseUrl: _syncHost.text.trim(),
+    token: _syncToken.text.trim(),
+  );
 
   Future<void> _saveSyncCfg({bool rethrowErrors = false}) async {
     try {
@@ -170,8 +187,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
       final client = LanSyncClient(widget.repo);
       final msg = await op(client);
       final last = await widget.repo.getSetting('lan_sync_last_full');
+      final review = await listSaleVoidNeedsReview(
+        await widget.repo.database.db,
+      );
       if (!mounted) return;
-      setState(() => _lastSync = last);
+      setState(() {
+        _lastSync = last;
+        _saleVoidReview = review;
+      });
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
     } catch (e) {
       if (!mounted) return;
@@ -180,6 +203,44 @@ class _SettingsScreenState extends State<SettingsScreen> {
       );
     } finally {
       if (mounted) setState(() => _syncBusy = false);
+    }
+  }
+
+  Future<void> _retrySaleVoidAfterReview(Map<String, Object?> operation) async {
+    if (_syncBusy) return;
+    final receipt = operation['receipt_no']?.toString() ?? '';
+    final accepted = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('核对后重试销售作废'),
+        content: Text(
+          '${receipt.isEmpty ? '此销售' : '收据 $receipt'} 的 Desktop 税务状态曾阻止作废。'
+          '\n\n请先核对 MyInvois 结果，确认可作废后再重试。原同步请求及操作 ID 会保留。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('我已核对，重试'),
+          ),
+        ],
+      ),
+    );
+    if (accepted != true || !mounted) return;
+    try {
+      await requeueSaleVoidAfterReview(
+        await widget.repo.database.db,
+        operation['id']?.toString() ?? '',
+      );
+      await _runSync((client) => client.fullSync(_cfg));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('$e'), backgroundColor: CnkhColors.danger),
+      );
     }
   }
 
@@ -195,14 +256,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
       await Directory(picked.trim()).create(recursive: true);
       await _reload();
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('缓存目录已更新\n$picked')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('缓存目录已更新\n$picked')));
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-            content: Text('选择失败: $e'), backgroundColor: CnkhColors.danger),
+        SnackBar(content: Text('选择失败: $e'), backgroundColor: CnkhColors.danger),
       );
     }
   }
@@ -212,9 +272,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     await widget.repo.setSetting(kEReceiptCacheDirKey, '');
     await _reload();
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('已恢复默认缓存目录')),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('已恢复默认缓存目录')));
   }
 
   Future<void> _factoryReset() async {
@@ -224,8 +284,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
       context: context,
       barrierDismissible: false,
       builder: (ctx) => AlertDialog(
-        title: const Text('⚠ 初始化 / 清空全部数据',
-            style: TextStyle(color: CnkhColors.danger)),
+        title: const Text(
+          '⚠ 初始化 / 清空全部数据',
+          style: TextStyle(color: CnkhColors.danger),
+        ),
         content: const Text(
           '将删除本机全部业务数据（销售、挂单、商品、客户、供应商、审计、设置等），'
           '并清空电子收据 PDF 缓存。\n\n'
@@ -235,8 +297,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('取消')),
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消'),
+          ),
           FilledButton(
             style: FilledButton.styleFrom(backgroundColor: CnkhColors.danger),
             onPressed: () => Navigator.pop(ctx, true),
@@ -273,8 +336,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('取消')),
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消'),
+          ),
           FilledButton(
             style: FilledButton.styleFrom(backgroundColor: CnkhColors.danger),
             onPressed: () {
@@ -306,7 +370,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-            content: Text('初始化失败: $e'), backgroundColor: CnkhColors.danger),
+          content: Text('初始化失败: $e'),
+          backgroundColor: CnkhColors.danger,
+        ),
       );
     } finally {
       if (mounted) setState(() => _resetBusy = false);
@@ -319,8 +385,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
       children: [
-        Text('设置 / Settings',
-            style: Theme.of(context).textTheme.headlineMedium),
+        Text(
+          '设置 / Settings',
+          style: Theme.of(context).textTheme.headlineMedium,
+        ),
         const SizedBox(height: 4),
         Text(
           canEdit ? '管理员可改收款码与小票格式' : '员工只读收款码与小票格式 · Staff view-only',
@@ -328,7 +396,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ),
         const SizedBox(height: 16),
         ReceiptTemplateEditor(repo: widget.repo, canEdit: canEdit),
-        Card(child: ListTile(leading: const Icon(Icons.receipt_long_outlined), title: const Text('e-Invoice 状态'), trailing: const Icon(Icons.chevron_right), onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => EInvoiceStatusScreen(repo: widget.repo))))),
+        Card(
+          child: ListTile(
+            leading: const Icon(Icons.receipt_long_outlined),
+            title: const Text('e-Invoice 状态'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => EInvoiceStatusScreen(repo: widget.repo),
+              ),
+            ),
+          ),
+        ),
         const SizedBox(height: 12),
         Card(
           child: Padding(
@@ -336,8 +415,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Text('DuitNow 收款码',
-                    style: Theme.of(context).textTheme.titleMedium),
+                Text(
+                  'DuitNow 收款码',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
                 const SizedBox(height: 12),
                 Container(
                   height: 200,
@@ -350,10 +431,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   child: _loading
                       ? const Center(child: CircularProgressIndicator())
                       : has
-                          ? Image.file(File(_path!), fit: BoxFit.contain)
-                          : const Center(
-                              child: Text('暂无图片',
-                                  style: TextStyle(color: CnkhColors.muted))),
+                      ? Image.file(File(_path!), fit: BoxFit.contain)
+                      : const Center(
+                          child: Text(
+                            '暂无图片',
+                            style: TextStyle(color: CnkhColors.muted),
+                          ),
+                        ),
                 ),
                 const SizedBox(height: 12),
                 if (canEdit) ...[
@@ -392,11 +476,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Text('运营设置 / Ops',
-                    style: Theme.of(context).textTheme.titleMedium),
+                Text(
+                  '运营设置 / Ops',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
                 const SizedBox(height: 8),
-                Text('库存不足策略 / Stock gate',
-                    style: Theme.of(context).textTheme.bodySmall),
+                Text(
+                  '库存不足策略 / Stock gate',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
                 Wrap(
                   spacing: 8,
                   children: [
@@ -406,8 +494,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       onSelected: widget.user.canEditQr
                           ? (_) async {
                               setState(() => _stockPolicy = 'warn');
-                              await widget.repo
-                                  .setSetting('stock_policy', 'warn');
+                              await widget.repo.setSetting(
+                                'stock_policy',
+                                'warn',
+                              );
                             }
                           : null,
                     ),
@@ -417,8 +507,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       onSelected: widget.user.canEditQr
                           ? (_) async {
                               setState(() => _stockPolicy = 'block');
-                              await widget.repo
-                                  .setSetting('stock_policy', 'block');
+                              await widget.repo.setSetting(
+                                'stock_policy',
+                                'block',
+                              );
                             }
                           : null,
                     ),
@@ -443,15 +535,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   },
                 ),
                 const SizedBox(height: 12),
-                Text('扫码反馈 / Scan feedback',
-                    style: Theme.of(context).textTheme.bodySmall),
+                Text(
+                  '扫码反馈 / Scan feedback',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
                 Wrap(
                   spacing: 8,
                   children: [
                     for (final m in [
                       ('beep', '提示音'),
                       ('vibrate', '震动'),
-                      ('mute', '静音')
+                      ('mute', '静音'),
                     ])
                       ChoiceChip(
                         label: Text(m.$2),
@@ -464,8 +558,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ],
                 ),
                 const SizedBox(height: 12),
-                Text('缺货推送阈值 / Low-stock threshold',
-                    style: Theme.of(context).textTheme.bodySmall),
+                Text(
+                  '缺货推送阈值 / Low-stock threshold',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
                 TextField(
                   controller: _lowStock,
                   enabled: canEdit,
@@ -489,7 +585,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       ? (v) async {
                           setState(() => _btEnabled = v);
                           await widget.repo.setSetting(
-                              'bt_printer_enabled', v ? '1' : '0');
+                            'bt_printer_enabled',
+                            v ? '1' : '0',
+                          );
                         }
                       : null,
                 ),
@@ -502,15 +600,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       ? (v) async {
                           setState(() => _imagesEnabled = v);
                           await widget.repo.setSetting(
-                              'product_images_enabled', v ? '1' : '0');
+                            'product_images_enabled',
+                            v ? '1' : '0',
+                          );
                         }
                       : null,
                 ),
                 OutlinedButton.icon(
                   onPressed: () {
                     Navigator.of(context).push(
-                      MaterialPageRoute(
-                          builder: (_) => const TrainingPage()),
+                      MaterialPageRoute(builder: (_) => const TrainingPage()),
                     );
                   },
                   icon: const Icon(Icons.school_outlined),
@@ -527,8 +626,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Text('局域网同步 / LAN Sync',
-                    style: Theme.of(context).textTheme.titleMedium),
+                Text(
+                  '局域网同步 / LAN Sync',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
                 const SizedBox(height: 4),
                 const Text(
                   '同一 Wi‑Fi 连接电脑同步服务（无云端）。PC Admin → Settings → LAN Sync。',
@@ -554,8 +655,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   _lastSync.isEmpty
                       ? '尚未同步 / Never synced'
                       : '上次同步 / Last: $_lastSync',
-                  style:
-                      const TextStyle(fontSize: 12, color: CnkhColors.muted),
+                  style: const TextStyle(fontSize: 12, color: CnkhColors.muted),
                 ),
                 const SizedBox(height: 8),
                 Wrap(
@@ -570,9 +670,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       onPressed: _syncBusy
                           ? null
                           : () => _runSync((c) async {
-                                final h = await c.health(_cfg);
-                                return 'OK · ${h['service']} · ${h['time']}';
-                              }),
+                              final h = await c.health(_cfg);
+                              return 'OK · ${h['service']} · ${h['time']}';
+                            }),
                       child: const Text('测试连接'),
                     ),
                     FilledButton(
@@ -589,7 +689,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                     FilledButton(
                       style: FilledButton.styleFrom(
-                          backgroundColor: CnkhColors.navy),
+                        backgroundColor: CnkhColors.navy,
+                      ),
                       onPressed: _syncBusy
                           ? null
                           : () => _runSync((c) => c.fullSync(_cfg)),
@@ -597,6 +698,35 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                   ],
                 ),
+                if (_saleVoidReview.isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  const Divider(),
+                  const Text(
+                    '销售作废待核对 / Sale void needs review',
+                    style: TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                  const SizedBox(height: 4),
+                  const Text(
+                    '原请求仍保留在同步队列。核对 MyInvois 状态后，可用原操作 ID 重试。',
+                    style: TextStyle(color: CnkhColors.muted, fontSize: 12),
+                  ),
+                  for (final operation in _saleVoidReview)
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: Text(
+                        operation['receipt_no']?.toString().isNotEmpty == true
+                            ? '收据 ${operation['receipt_no']}'
+                            : '销售 ${operation['entity_id']}',
+                      ),
+                      subtitle: Text('${operation['last_error'] ?? ''}'),
+                      trailing: TextButton(
+                        onPressed: _syncBusy
+                            ? null
+                            : () => _retrySaleVoidAfterReview(operation),
+                        child: const Text('核对后重试'),
+                      ),
+                    ),
+                ],
               ],
             ),
           ),
@@ -609,7 +739,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
             child: Text(
               'PC-only：条码标签硬件打印、Windows 备份/还原。请在桌面 Admin 使用。',
               style: TextStyle(
-                  fontSize: 12, height: 1.4, color: Color(0xFF7A5A10)),
+                fontSize: 12,
+                height: 1.4,
+                color: Color(0xFF7A5A10),
+              ),
             ),
           ),
         ),
@@ -620,8 +753,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Text('电子收据缓存 / E-receipt cache',
-                    style: Theme.of(context).textTheme.titleMedium),
+                Text(
+                  '电子收据缓存 / E-receipt cache',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
                 const SizedBox(height: 6),
                 const Text(
                   'PDF 缓存最多保留 7 天；发送后不立即删除。可自定义目录。',
@@ -645,7 +780,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   Text(
                     '自定义路径（默认: $_cacheDefault）',
                     style: const TextStyle(
-                        fontSize: 11, color: CnkhColors.muted),
+                      fontSize: 11,
+                      color: CnkhColors.muted,
+                    ),
                   ),
                 ],
                 const SizedBox(height: 10),
@@ -656,7 +793,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     children: [
                       FilledButton.icon(
                         style: FilledButton.styleFrom(
-                            backgroundColor: CnkhColors.navy),
+                          backgroundColor: CnkhColors.navy,
+                        ),
                         onPressed: _pickCacheDir,
                         icon: const Icon(Icons.folder_open),
                         label: const Text('选择文件夹'),
@@ -673,20 +811,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             context: context,
                             builder: (ctx) => AlertDialog(
                               title: const Text('清空电子收据缓存？'),
-                              content:
-                                  Text('当前约 $n 个 PDF。清空后无法从本机重发旧缓存。'),
+                              content: Text('当前约 $n 个 PDF。清空后无法从本机重发旧缓存。'),
                               actions: [
                                 TextButton(
-                                    onPressed: () => Navigator.pop(ctx, false),
-                                    child: const Text('取消')),
+                                  onPressed: () => Navigator.pop(ctx, false),
+                                  child: const Text('取消'),
+                                ),
                                 FilledButton(
-                                    onPressed: () => Navigator.pop(ctx, true),
-                                    child: const Text('清空')),
+                                  onPressed: () => Navigator.pop(ctx, true),
+                                  child: const Text('清空'),
+                                ),
                               ],
                             ),
                           );
                           if (ok != true) return;
-                          final deleted = await clearEReceiptCache(repo: widget.repo);
+                          final deleted = await clearEReceiptCache(
+                            repo: widget.repo,
+                          );
                           if (!context.mounted) return;
                           ScaffoldMessenger.of(context).showSnackBar(
                             SnackBar(content: Text('已删除 $deleted 个缓存 PDF')),
@@ -698,8 +839,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ],
                   )
                 else
-                  const Text('仅管理员可更改缓存目录',
-                      style: TextStyle(color: CnkhColors.muted, fontSize: 12)),
+                  const Text(
+                    '仅管理员可更改缓存目录',
+                    style: TextStyle(color: CnkhColors.muted, fontSize: 12),
+                  ),
               ],
             ),
           ),
@@ -713,10 +856,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Text('危险区域 / Danger zone',
-                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                            color: CnkhColors.danger,
-                          )),
+                  Text(
+                    '危险区域 / Danger zone',
+                    style: Theme.of(
+                      context,
+                    ).textTheme.titleMedium?.copyWith(color: CnkhColors.danger),
+                  ),
                   const SizedBox(height: 6),
                   const Text(
                     '初始化会清空本机 SQLite 业务数据与电子收据缓存，并重新载入演示种子。',
@@ -725,18 +870,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   const SizedBox(height: 12),
                   FilledButton.icon(
                     style: FilledButton.styleFrom(
-                        backgroundColor: CnkhColors.danger),
+                      backgroundColor: CnkhColors.danger,
+                    ),
                     onPressed: _resetBusy ? null : _factoryReset,
                     icon: _resetBusy
                         ? const SizedBox(
                             width: 18,
                             height: 18,
                             child: CircularProgressIndicator(
-                                strokeWidth: 2, color: Colors.white),
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
                           )
                         : const Icon(Icons.restart_alt),
-                    label: Text(
-                        _resetBusy ? '初始化中…' : '初始化 / 清空全部数据'),
+                    label: Text(_resetBusy ? '初始化中…' : '初始化 / 清空全部数据'),
                   ),
                 ],
               ),
@@ -746,16 +893,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
         const SizedBox(height: 12),
         Card(
           child: ListTile(
-            leading:
-                const Icon(Icons.info_outline, color: CnkhColors.primary),
+            leading: const Icon(Icons.info_outline, color: CnkhColors.primary),
             title: const Text('关于 / About'),
-            subtitle: const Text(
-                'CNKH POS Mobile 1.6.0 · Receipt template · 黄金发宝号'),
+            subtitle: const Text('CNKH POS Mobile $appVersionLabel · 黄金发宝号'),
             onTap: () => showAboutDialog(
               context: context,
               applicationName: 'CNKH POS Mobile',
-              applicationVersion: '1.6.0',
+              applicationVersion: appVersionLabel,
               applicationLegalese: '黄金发宝号 companion',
+              children: [
+                const Text('本次更新 / This update'),
+                const SizedBox(height: 8),
+                for (final note in appReleaseNotes)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: Text('• $note'),
+                  ),
+              ],
             ),
           ),
         ),

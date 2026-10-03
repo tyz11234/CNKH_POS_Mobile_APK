@@ -42,6 +42,10 @@ String normalizeMyPhone(String raw) {
   return digits;
 }
 
+/// Saved sales own the recipient snapshot used by PDF sharing.
+String eReceiptRecipientPhone(SaleRecord sale) =>
+    (sale.customerPhone ?? '').trim();
+
 /// Thermal / preview text via [ReceiptTemplate] (single source of truth).
 String buildPrintReceiptText({
   required String receiptNo,
@@ -61,7 +65,8 @@ String buildPrintReceiptText({
   String notes = '',
   ReceiptTemplate? template,
 }) {
-  final effective = template ??
+  final effective =
+      template ??
       ReceiptTemplate(
         storeName: storeName,
         address: address,
@@ -88,7 +93,8 @@ String buildPrintReceiptTextFromSale(
   String storeName = kStoreName,
   ReceiptTemplate? template,
 }) {
-  final effective = template ??
+  final effective =
+      template ??
       ReceiptTemplate(storeName: storeName.isEmpty ? kStoreName : storeName);
   return effective.renderFromSale(sale);
 }
@@ -157,28 +163,29 @@ Future<File> writeReceiptPdfTemp(
     );
   }
   final text = effective.renderFromSale(sale);
+  final fontData = await rootBundle.load('assets/fonts/NotoSansSC-Regular.ttf');
+  final font = pw.Font.ttf(fontData);
   final doc = pw.Document();
-  // 80mm thermal-ish page width
+  // Keep the 80mm receipt width while allowing long receipts to paginate.
   const pageWidth = 80.0 * PdfPageFormat.mm;
   final lines = text.split('\n');
-  final pageHeight = (lines.length * 12.0 + 40).clamp(200.0, 2000.0);
   doc.addPage(
-    pw.Page(
-      pageFormat: PdfPageFormat(pageWidth, pageHeight, marginAll: 4 * PdfPageFormat.mm),
-      build: (ctx) => pw.Column(
-        crossAxisAlignment: pw.CrossAxisAlignment.start,
-        children: [
-          for (final line in lines)
-            pw.Text(
-              line,
-              style: pw.TextStyle(
-                font: pw.Font.courier(),
-                fontSize: 7.5,
-                lineSpacing: 1.2,
-              ),
-            ),
-        ],
+    pw.MultiPage(
+      pageFormat: PdfPageFormat(
+        pageWidth,
+        200.0 * PdfPageFormat.mm,
+        marginAll: 4 * PdfPageFormat.mm,
       ),
+      maxPages: 1000,
+      // MultiPage can split this list between pages. A single Column containing
+      // every receipt line is indivisible and still overflows on long sales.
+      build: (ctx) => [
+        for (final line in lines)
+          pw.Text(
+            line,
+            style: pw.TextStyle(font: font, fontSize: 7.5, lineSpacing: 1.2),
+          ),
+      ],
     ),
   );
   final dir = await getTemporaryDirectory();
@@ -248,12 +255,14 @@ Future<String> defaultEReceiptCachePath() async {
 Future<Directory> eReceiptCacheDir({PosRepository? repo}) async {
   String custom = '';
   try {
-    custom = (await (repo ?? PosRepository()).getSetting(kEReceiptCacheDirKey))
-        .trim();
+    custom = (await (repo ?? PosRepository()).getSetting(
+      kEReceiptCacheDirKey,
+    )).trim();
   } catch (_) {}
   final path = custom.isNotEmpty ? custom : await defaultEReceiptCachePath();
   final dir = Directory(p.join(path, OwnedReceiptCache.folder));
-  if (await FileSystemEntity.type(dir.path, followLinks: false) == FileSystemEntityType.link) {
+  if (await FileSystemEntity.type(dir.path, followLinks: false) ==
+      FileSystemEntityType.link) {
     throw StateError('收据缓存目录不能是链接');
   }
   if (!await dir.exists()) {

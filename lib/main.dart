@@ -18,6 +18,7 @@ import 'widgets/e_receipt_actions.dart';
 import 'services/bluetooth_printer.dart';
 import 'services/lan_sync.dart';
 import 'services/purchase_history_sync.dart';
+import 'services/held_cart_coordinator.dart';
 import 'services/e_receipt.dart';
 import 'screens/barcode_scan_screen.dart';
 
@@ -64,13 +65,19 @@ class _RootState extends State<_Root> {
   Widget build(BuildContext context) {
     final user = _user;
     if (user == null) {
-      return LoginScreen(repo:_repo,onLoggedIn: (u) => setState(() => _user = u));
+      return LoginScreen(
+        repo: _repo,
+        onLoggedIn: (u) => setState(() => _user = u),
+      );
     }
     return HomeShell(
       user: user,
       qrStorage: _qr,
       repo: _repo,
-      onLogout: () { _repo.auth.logout();setState(()=>_user=null); },
+      onLogout: () {
+        _repo.auth.logout();
+        setState(() => _user = null);
+      },
     );
   }
 }
@@ -97,6 +104,7 @@ class _HomeShellState extends State<HomeShell> {
   int _tab = 0;
   int _dataEpoch = 0; // bumps → Today sales / admin lists refresh
   final CartState _cart = CartState();
+  final HeldCartCoordinator _holdCart = HeldCartCoordinator();
   late final LanSyncClient _syncClient = LanSyncClient(widget.repo);
   late final LanLiveSync _live = LanLiveSync(_syncClient);
   SyncLinkState _linkState = SyncLinkState.offline;
@@ -106,7 +114,8 @@ class _HomeShellState extends State<HomeShell> {
   late final _purchaseHistory = PurchaseHistoryCoordinator(
     pull: ({required bool full}) =>
         PurchaseHistorySync(widget.repo).pullFromSavedDesktop(full: full),
-    saveError: (error) => widget.repo.setSetting('lan_sync_last_purchase_error', error),
+    saveError: (error) =>
+        widget.repo.setSetting('lan_sync_last_purchase_error', error),
     onChanged: _bumpData,
   );
 
@@ -206,10 +215,7 @@ class _HomeShellState extends State<HomeShell> {
   Future<void> _pairByQr() async {
     final cfg = await Navigator.of(context).push<LanSyncConfig>(
       MaterialPageRoute(
-        builder: (_) => BarcodeScanScreen(
-          repo: widget.repo,
-          pairingOnly: true,
-        ),
+        builder: (_) => BarcodeScanScreen(repo: widget.repo, pairingOnly: true),
       ),
     );
     if (cfg == null || !mounted) return;
@@ -222,7 +228,10 @@ class _HomeShellState extends State<HomeShell> {
       await _syncPurchaseHistory(force: true);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('强制全量对账完成\n$msg'), backgroundColor: CnkhColors.success),
+        SnackBar(
+          content: Text('强制全量对账完成\n$msg'),
+          backgroundColor: CnkhColors.success,
+        ),
       );
       _bumpData();
     } catch (e) {
@@ -237,10 +246,10 @@ class _HomeShellState extends State<HomeShell> {
   }
 
   Color get _statusDotColor => switch (_linkState) {
-        SyncLinkState.connected => const Color(0xFF69F0AE),
-        SyncLinkState.pending => const Color(0xFFFFB300),
-        SyncLinkState.offline => const Color(0xFF9E9E9E),
-      };
+    SyncLinkState.connected => const Color(0xFF69F0AE),
+    SyncLinkState.pending => const Color(0xFFFFB300),
+    SyncLinkState.offline => const Color(0xFF9E9E9E),
+  };
 
   void _handleRemoteChange() {
     _bumpData();
@@ -264,7 +273,14 @@ class _HomeShellState extends State<HomeShell> {
       _Nav('设置 Settings', Icons.settings, Icons.settings_outlined),
     ];
     if (widget.user.isAdmin) {
-      list.insert(2, _Nav('管理 Admin', Icons.admin_panel_settings, Icons.admin_panel_settings_outlined));
+      list.insert(
+        2,
+        _Nav(
+          '管理 Admin',
+          Icons.admin_panel_settings,
+          Icons.admin_panel_settings_outlined,
+        ),
+      );
     }
     return list;
   }
@@ -297,16 +313,12 @@ class _HomeShellState extends State<HomeShell> {
                 if (!await bt.enabled()) return;
                 final msg = await bt.tryPrintSale(sale);
                 if (!mounted || msg == 'bt_off' || msg == 'ok') return;
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text(msg)),
-                );
+                ScaffoldMessenger.of(
+                  context,
+                ).showSnackBar(SnackBar(content: Text(msg)));
               } catch (_) {}
             }();
-            await showSaleSuccessSheet(
-              context,
-              sale: sale,
-              repo: widget.repo,
-            );
+            await showSaleSuccessSheet(context, sale: sale, repo: widget.repo);
           },
         ),
       ),
@@ -314,18 +326,25 @@ class _HomeShellState extends State<HomeShell> {
   }
 
   Future<void> _hold() async {
+    if (_holdCart.isBusy) return;
+    setState(() {});
     try {
-      final held = await widget.repo.holdCart(
+      final result = await _holdCart.hold(
+        repo: widget.repo,
         cart: _cart,
         cashier: widget.user.username,
       );
-      setState(() {
-        _cart.items.clear();
-        _cart.orderDiscountCents = 0;
-      });
+      if (result == null) return;
       if (!mounted) return;
+      setState(() {});
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('已挂单 ${held.holdNo}')),
+        SnackBar(
+          content: Text(
+            result.cartCleared
+                ? '已挂单 ${result.order.holdNo}'
+                : '已挂单 ${result.order.holdNo}；购物车在保存期间有变动，已保留当前内容',
+          ),
+        ),
       );
       await _refreshOverdueHolds();
     } catch (e) {
@@ -333,6 +352,8 @@ class _HomeShellState extends State<HomeShell> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('$e'), backgroundColor: CnkhColors.danger),
       );
+    } finally {
+      if (mounted) setState(() {});
     }
   }
 
@@ -341,55 +362,68 @@ class _HomeShellState extends State<HomeShell> {
     if (_resuming) return;
     setState(() => _resuming = true);
     try {
-    if (_cart.items.isNotEmpty) throw StateError('请先挂单或清空当前购物车，再取单');
-    final list = await widget.repo.listHeld(cashier: widget.user.username);
-    if (!mounted) return;
-    if (list.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('无挂单 / No held orders')),
-      );
-      return;
-    }
-    final timeout = await widget.repo.holdTimeoutMinutes();
-    final cutoff = DateTime.now().subtract(Duration(minutes: timeout));
-    final selected = await showDialog<HeldOrder>(
-      context: context,
-      builder: (ctx) => SimpleDialog(
-        title: Text(_overdueHolds > 0
-            ? '取单 / Resume（超时 $_overdueHolds）'
-            : '取单 / Resume'),
-        children: [
-          for (final h in list)
-            SimpleDialogOption(
-              onPressed: () => Navigator.pop(ctx, h),
-              child: Text(
-                '${h.holdNo} · ${h.heldAt.substring(0, 16).replaceFirst('T', ' ')}'
-                '${(DateTime.tryParse(h.heldAt)?.isBefore(cutoff) == true) ? '  ⚠超时' : ''}',
-                style: TextStyle(
-                  color: (DateTime.tryParse(h.heldAt)?.isBefore(cutoff) == true)
-                      ? const Color(0xFFB26A00)
-                      : null,
-                  fontWeight: (DateTime.tryParse(h.heldAt)?.isBefore(cutoff) == true)
-                      ? FontWeight.w800
-                      : FontWeight.w500,
+      if (_cart.items.isNotEmpty) throw StateError('请先挂单或清空当前购物车，再取单');
+      final list = await widget.repo.listHeld(cashier: widget.user.username);
+      if (!mounted) return;
+      if (list.isEmpty) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('无挂单 / No held orders')));
+        return;
+      }
+      final timeout = await widget.repo.holdTimeoutMinutes();
+      if (!mounted) return;
+      final cutoff = DateTime.now().subtract(Duration(minutes: timeout));
+      final selected = await showDialog<HeldOrder>(
+        context: context,
+        builder: (ctx) => SimpleDialog(
+          title: Text(
+            _overdueHolds > 0
+                ? '取单 / Resume（超时 $_overdueHolds）'
+                : '取单 / Resume',
+          ),
+          children: [
+            for (final h in list)
+              SimpleDialogOption(
+                onPressed: () => Navigator.pop(ctx, h),
+                child: Text(
+                  '${h.holdNo} · ${h.heldAt.substring(0, 16).replaceFirst('T', ' ')}'
+                  '${(DateTime.tryParse(h.heldAt)?.isBefore(cutoff) == true) ? '  ⚠超时' : ''}',
+                  style: TextStyle(
+                    color:
+                        (DateTime.tryParse(h.heldAt)?.isBefore(cutoff) == true)
+                        ? const Color(0xFFB26A00)
+                        : null,
+                    fontWeight:
+                        (DateTime.tryParse(h.heldAt)?.isBefore(cutoff) == true)
+                        ? FontWeight.w800
+                        : FontWeight.w500,
+                  ),
                 ),
               ),
-            ),
-        ],
-      ),
-    );
-    if (selected == null) return;
-    if (!mounted) return;
-    final restored = await widget.repo.resumeHeld(selected, currentCart: _cart);
-    if (!mounted) return;
-    setState(() {
-      _cart.items.addAll(restored.items);
-      _cart.orderDiscountCents = restored.orderDiscountCents;
-    });
-    await _refreshOverdueHolds();
+          ],
+        ),
+      );
+      if (selected == null) return;
+      if (!mounted) return;
+      final restored = await widget.repo.resumeHeld(
+        selected,
+        currentCart: _cart,
+      );
+      if (!mounted) return;
+      setState(() {
+        _cart.items.addAll(restored.items);
+        _cart.orderDiscountCents = restored.orderDiscountCents;
+      });
+      await _refreshOverdueHolds();
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
-    } finally { if (mounted) setState(() => _resuming = false); }
+      if (mounted)
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('$e')));
+    } finally {
+      if (mounted) setState(() => _resuming = false);
+    }
   }
 
   Future<void> _openOverdueHolds() async {
@@ -401,19 +435,24 @@ class _HomeShellState extends State<HomeShell> {
   Widget build(BuildContext context) {
     final navs = _navs;
     final pages = <Widget>[
-      AbsorbPointer(absorbing: _resuming, child: CartScreen(
-        cart: _cart,
-        user: widget.user,
-        repo: widget.repo,
-        onChanged: () => setState(() {}),
-        onCheckout: _checkout,
-        onHold: _hold,
-        onResume: _resume,
-        onPairing: (cfg) {
-          Navigator.of(context).pop(); // close scanner
-          _applyPairing(cfg);
-        },
-      )),
+      AbsorbPointer(
+        absorbing: _resuming,
+        child: CartScreen(
+          cart: _cart,
+          user: widget.user,
+          repo: widget.repo,
+          onChanged: () => setState(() {}),
+          onCheckout: _checkout,
+          onHold: _hold,
+          isHolding: _holdCart.isBusy,
+          refreshToken: _dataEpoch,
+          onResume: _resume,
+          onPairing: (cfg) {
+            Navigator.of(context).pop(); // close scanner
+            _applyPairing(cfg);
+          },
+        ),
+      ),
       SalesListScreen(
         repo: widget.repo,
         todayOnly: true,
@@ -458,7 +497,10 @@ class _HomeShellState extends State<HomeShell> {
               icon: Badge(
                 label: Text('$_overdueHolds'),
                 backgroundColor: const Color(0xFFFFB300),
-                child: const Icon(Icons.pause_circle_filled, color: Color(0xFFFFB300)),
+                child: const Icon(
+                  Icons.pause_circle_filled,
+                  color: Color(0xFFFFB300),
+                ),
               ),
             ),
           IconButton(
@@ -492,14 +534,21 @@ class _HomeShellState extends State<HomeShell> {
                   right: 4,
                   bottom: 8,
                   child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 4,
+                      vertical: 1,
+                    ),
                     decoration: BoxDecoration(
                       color: const Color(0xFFFFB300),
                       borderRadius: BorderRadius.circular(8),
                     ),
                     child: Text(
                       '$_pending',
-                      style: const TextStyle(fontSize: 9, fontWeight: FontWeight.w800, color: Colors.black),
+                      style: const TextStyle(
+                        fontSize: 9,
+                        fontWeight: FontWeight.w800,
+                        color: Colors.black,
+                      ),
                     ),
                   ),
                 ),
@@ -509,7 +558,10 @@ class _HomeShellState extends State<HomeShell> {
             padding: const EdgeInsets.only(right: 4),
             child: Center(
               child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 4,
+                ),
                 decoration: BoxDecoration(
                   color: widget.user.isAdmin
                       ? const Color(0xFF2E7D32)

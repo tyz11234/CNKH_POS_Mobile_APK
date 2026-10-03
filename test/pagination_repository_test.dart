@@ -30,18 +30,21 @@ void main() {
       final db = await database.db;
       for (var i = 0; i < 101; i++) {
         final id = 'p-${i.toString().padLeft(3, '0')}';
-        await db.insert('products', Product(
-          id: id,
-          nameZh: '商品 ${i.toString().padLeft(3, '0')}',
-          nameEn: '',
-          sku: 'SKU$i',
-          barcode: 'B$i',
-          priceCents: 100,
-          costCents: 50,
-          stock: 1,
-          unit: 'pcs',
-          category: '测试',
-        ).toMap());
+        await db.insert(
+          'products',
+          Product(
+            id: id,
+            nameZh: '商品 ${i.toString().padLeft(3, '0')}',
+            nameEn: '',
+            sku: 'SKU$i',
+            barcode: 'B$i',
+            priceCents: 100,
+            costCents: 50,
+            stock: 1,
+            unit: 'pcs',
+            category: '测试',
+          ).toMap(),
+        );
       }
 
       final a = await repo.searchProducts('', limit: 50, offset: 0);
@@ -58,16 +61,83 @@ void main() {
       for (var i = 0; i < 51; i++) {
         final n = i.toString().padLeft(3, '0');
         await db.insert('customers', {
-          'id': 'c$n', 'name': 'Customer $n', 'phone': '', 'notes': '', 'is_deleted': 0,
+          'id': 'c$n',
+          'name': 'Customer $n',
+          'phone': '',
+          'notes': '',
+          'is_deleted': 0,
         });
         await db.insert('suppliers', {
-          'id': 's$n', 'name': 'Supplier $n', 'phone': '', 'email': '', 'notes': '', 'is_deleted': 0,
+          'id': 's$n',
+          'name': 'Supplier $n',
+          'phone': '',
+          'email': '',
+          'notes': '',
+          'is_deleted': 0,
         });
       }
       expect((await repo.listCustomers(limit: 50)).length, 50);
-      expect((await repo.listCustomers(limit: 50, offset: 50)).single.id, 'c050');
+      expect(
+        (await repo.listCustomers(limit: 50, offset: 50)).single.id,
+        'c050',
+      );
       expect((await repo.listSuppliers(limit: 50)).length, 50);
-      expect((await repo.listSuppliers(limit: 50, offset: 50)).single.id, 's050');
+      expect(
+        (await repo.listSuppliers(limit: 50, offset: 50)).single.id,
+        's050',
+      );
     });
+
+    test(
+      'exact barcode stays before matching names at 41 and 51 row boundaries',
+      () async {
+        final db = await database.db;
+        for (var i = 0; i < 50; i++) {
+          final key = i.toString().padLeft(2, '0');
+          await db.insert(
+            'products',
+            Product(
+              id: 'name-$key',
+              nameZh: 'MATCH 商品 $key',
+              nameEn: 'Match product $key',
+              sku: 'SKU-$key',
+              barcode: 'OTHER-$key',
+              priceCents: 100,
+              costCents: 50,
+              stock: 1,
+            ).toMap(),
+          );
+        }
+        await db.insert(
+          'products',
+          const Product(
+            id: 'exact-match',
+            nameZh: 'Match exact code',
+            nameEn: 'Match exact',
+            sku: 'EXACT',
+            barcode: 'MATCH',
+            priceCents: 100,
+            costCents: 50,
+            stock: 1,
+          ).toMap(),
+        );
+
+        for (final size in [40, 50]) {
+          final first = await repo.searchProducts('MATCH', limit: size);
+          final second = await repo.searchProducts(
+            'MATCH',
+            limit: size,
+            offset: size,
+          );
+          final ids = [
+            ...first,
+            ...second,
+          ].map((product) => product.id).toList();
+          expect(first.first.id, 'exact-match');
+          expect(ids, hasLength(51));
+          expect(ids.toSet(), hasLength(51));
+        }
+      },
+    );
   });
 }

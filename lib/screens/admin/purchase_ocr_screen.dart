@@ -36,7 +36,9 @@ class PurchaseOcrScreen extends StatefulWidget {
 }
 
 class _PurchaseOcrScreenState extends State<PurchaseOcrScreen> {
-  late final PurchaseOcrRepository _ocrRepo = PurchaseOcrRepository(widget.repo);
+  late final PurchaseOcrRepository _ocrRepo = PurchaseOcrRepository(
+    widget.repo,
+  );
   final _recognizer = LocalOcrService();
   final _imageStore = const PurchaseInvoiceImageStore();
   final _parser = const PurchaseInvoiceParser();
@@ -80,20 +82,24 @@ class _PurchaseOcrScreenState extends State<PurchaseOcrScreen> {
           return;
         }
         final draftId = AppDatabase.newId();
-        final images =
-            await _imageStore.saveOriginalAndPreview(picked.path, draftId);
+        final images = await _imageStore.saveOriginalAndPreview(
+          picked.path,
+          draftId,
+        );
         createdOriginal = images.originalPath;
         createdPreview = images.previewPath;
 
         // Recognition intentionally uses the byte-for-byte original. Preview is
         // only for UI display and may be compressed/resized.
         final rawText = await _recognizer.recognizeFile(images.originalPath);
-        draft = _parser.parse(
-          rawText,
-          draftId: draftId,
-          createdBy: widget.user.username,
-          imagePath: images.previewPath,
-        ).copyWith(originalImagePath: images.originalPath);
+        draft = _parser
+            .parse(
+              rawText,
+              draftId: draftId,
+              createdBy: widget.user.username,
+              imagePath: images.previewPath,
+            )
+            .copyWith(originalImagePath: images.originalPath);
         draft = await _ocrRepo.prepareDraft(draft);
       }
       await _ocrRepo.saveDraft(draft);
@@ -141,8 +147,9 @@ class _PurchaseOcrScreenState extends State<PurchaseOcrScreen> {
     final subtotal = TextEditingController(
       text: (line.lineSubtotalCents / 100).toStringAsFixed(2),
     );
-    final conversion =
-        TextEditingController(text: line.conversionFactor.toString());
+    final conversion = TextEditingController(
+      text: line.conversionFactor.toString(),
+    );
 
     String? qtyError;
     String? conversionError;
@@ -178,7 +185,10 @@ class _PurchaseOcrScreenState extends State<PurchaseOcrScreen> {
                       for (final p in _products)
                         DropdownMenuItem(
                           value: p.id,
-                          child: Text(p.nameZh, overflow: TextOverflow.ellipsis),
+                          child: Text(
+                            p.nameZh,
+                            overflow: TextOverflow.ellipsis,
+                          ),
                         ),
                     ],
                     onChanged: (v) => setLocal(() => productId = v),
@@ -186,8 +196,9 @@ class _PurchaseOcrScreenState extends State<PurchaseOcrScreen> {
                   const SizedBox(height: 8),
                   TextField(
                     controller: qty,
-                    keyboardType:
-                        const TextInputType.numberWithOptions(decimal: true),
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
                     onChanged: (_) {
                       if (qtyError != null) setLocal(() => qtyError = null);
                     },
@@ -202,8 +213,9 @@ class _PurchaseOcrScreenState extends State<PurchaseOcrScreen> {
                   ),
                   TextField(
                     controller: conversion,
-                    keyboardType:
-                        const TextInputType.numberWithOptions(decimal: true),
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
                     onChanged: (_) {
                       if (conversionError != null) {
                         setLocal(() => conversionError = null);
@@ -217,8 +229,9 @@ class _PurchaseOcrScreenState extends State<PurchaseOcrScreen> {
                   ),
                   TextField(
                     controller: cost,
-                    keyboardType:
-                        const TextInputType.numberWithOptions(decimal: true),
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
                     onChanged: (_) {
                       if (costError != null) setLocal(() => costError = null);
                     },
@@ -230,8 +243,9 @@ class _PurchaseOcrScreenState extends State<PurchaseOcrScreen> {
                   ),
                   TextField(
                     controller: subtotal,
-                    keyboardType:
-                        const TextInputType.numberWithOptions(decimal: true),
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
                     onChanged: (_) {
                       if (subtotalError != null) {
                         setLocal(() => subtotalError = null);
@@ -257,18 +271,19 @@ class _PurchaseOcrScreenState extends State<PurchaseOcrScreen> {
                 final q = double.tryParse(qty.text.trim());
                 final c = double.tryParse(conversion.text.trim());
                 final unitCost = _parser.parseMoneyCents(cost.text.trim());
-                final lineSubtotal =
-                    _parser.parseMoneyCents(subtotal.text.trim());
+                final lineSubtotal = _parser.parseMoneyCents(
+                  subtotal.text.trim(),
+                );
                 final nextQtyError = q == null || !q.isFinite || q <= 0
                     ? '数量必须是大于 0 的有效数字'
                     : null;
-                final nextConversionError =
-                    c == null || !c.isFinite || c <= 0
-                        ? '换算倍率必须是大于 0 的有效数字'
-                        : null;
+                final nextConversionError = c == null || !c.isFinite || c <= 0
+                    ? '换算倍率必须是大于 0 的有效数字'
+                    : null;
                 final nextCostError = unitCost == null ? '金额格式错误' : null;
-                final nextSubtotalError =
-                    lineSubtotal == null ? '金额格式错误' : null;
+                final nextSubtotalError = lineSubtotal == null
+                    ? '金额格式错误'
+                    : null;
                 if (nextQtyError != null ||
                     nextConversionError != null ||
                     nextCostError != null ||
@@ -305,6 +320,9 @@ class _PurchaseOcrScreenState extends State<PurchaseOcrScreen> {
       unitCostCents: parsedCost!,
       lineSubtotalCents: parsedSubtotal!,
       userModified: true,
+      warnings: line.warnings
+          .where((warning) => warning.code != 'supplier_memory_unit_conflict')
+          .toList(growable: false),
     );
     final lines = [...draft.lines]..[index] = nextLine;
     setState(() => _draft = draft.copyWith(lines: lines));
@@ -427,11 +445,13 @@ class _PurchaseOcrScreenState extends State<PurchaseOcrScreen> {
                     : _parser.parseMoneyCents(invoiceText);
                 final nextDiscountError = d == null ? '金额格式错误' : null;
                 final nextTaxError = t == null ? '金额格式错误' : null;
-                final nextDeliveryError =
-                    deliveryValue == null ? '金额格式错误' : null;
+                final nextDeliveryError = deliveryValue == null
+                    ? '金额格式错误'
+                    : null;
                 final nextOtherError = o == null ? '金额格式错误' : null;
-                final nextInvoiceError =
-                    invoiceText.isNotEmpty && inv == null ? '金额格式错误' : null;
+                final nextInvoiceError = invoiceText.isNotEmpty && inv == null
+                    ? '金额格式错误'
+                    : null;
                 if (nextDiscountError != null ||
                     nextTaxError != null ||
                     nextDeliveryError != null ||
@@ -483,17 +503,16 @@ class _PurchaseOcrScreenState extends State<PurchaseOcrScreen> {
     String label, {
     String? errorText,
     ValueChanged<String>? onChanged,
-  }) =>
-      TextField(
-        controller: c,
-        keyboardType: const TextInputType.numberWithOptions(decimal: true),
-        onChanged: onChanged,
-        decoration: InputDecoration(
-          labelText: label,
-          prefixText: 'RM ',
-          errorText: errorText,
-        ),
-      );
+  }) => TextField(
+    controller: c,
+    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+    onChanged: onChanged,
+    decoration: InputDecoration(
+      labelText: label,
+      prefixText: 'RM ',
+      errorText: errorText,
+    ),
+  );
 
   Future<void> _selectSupplier(String? id) async {
     if (id == null) return;
@@ -574,6 +593,7 @@ class _PurchaseOcrScreenState extends State<PurchaseOcrScreen> {
       ),
     );
     if (first != true) return null;
+    if (!mounted) return null;
 
     final second = await showDialog<bool>(
       context: context,
@@ -603,13 +623,12 @@ class _PurchaseOcrScreenState extends State<PurchaseOcrScreen> {
     var committed = false;
     try {
       await _revalidate();
+      if (!mounted) return;
       final draft = _draft!;
       if (draft.hasBlockingIssues) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('请先处理红色错误和未匹配商品，OCR 不会直接入库。'),
-            ),
+            const SnackBar(content: Text('请先处理红色错误和未匹配商品，OCR 不会直接入库。')),
           );
         }
         return;
@@ -669,15 +688,13 @@ class _PurchaseOcrScreenState extends State<PurchaseOcrScreen> {
       );
       committed = true;
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('OCR 进货已确认入库')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('OCR 进货已确认入库')));
       Navigator.pop(context, true);
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('$e')),
-      );
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
     } finally {
       if (!committed && mounted) setState(() => _busy = false);
     }
@@ -710,16 +727,14 @@ class _PurchaseOcrScreenState extends State<PurchaseOcrScreen> {
     try {
       await _ocrRepo.deleteDraft(draft.draftId);
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('OCR 草稿已删除')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('OCR 草稿已删除')));
       Navigator.pop(context, false);
     } catch (e) {
       if (!mounted) return;
       setState(() => _busy = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('$e')),
-      );
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
     }
   }
 
@@ -789,13 +804,16 @@ class _PurchaseOcrScreenState extends State<PurchaseOcrScreen> {
       );
     }
     final draft = _draft!;
-    final visible = <MapEntry<int, PurchaseDraftLine>>[
-      for (var i = 0; i < draft.lines.length; i++) MapEntry(i, draft.lines[i]),
-    ].where((e) {
-      if (!_onlyExceptions) return true;
-      return !e.value.isMatched || e.value.warnings.isNotEmpty;
-    }).toList();
-    final warningCount = draft.warnings.length +
+    final visible =
+        <MapEntry<int, PurchaseDraftLine>>[
+          for (var i = 0; i < draft.lines.length; i++)
+            MapEntry(i, draft.lines[i]),
+        ].where((e) {
+          if (!_onlyExceptions) return true;
+          return !e.value.isMatched || e.value.warnings.isNotEmpty;
+        }).toList();
+    final warningCount =
+        draft.warnings.length +
         draft.lines.fold<int>(0, (sum, l) => sum + l.warnings.length);
 
     return Scaffold(
@@ -830,7 +848,8 @@ class _PurchaseOcrScreenState extends State<PurchaseOcrScreen> {
                       ? null
                       : () async {
                           await _ocrRepo.saveDraft(draft);
-                          if (mounted) Navigator.pop(context, false);
+                          if (!context.mounted) return;
+                          Navigator.pop(context, false);
                         },
                   child: const Text('保存草稿'),
                 ),
@@ -920,18 +939,21 @@ class _PurchaseOcrScreenState extends State<PurchaseOcrScreen> {
           for (final w in draft.warnings) _warningTile(w),
           SwitchListTile(
             value: _onlyExceptions,
-            onChanged: _busy ? null : (v) => setState(() => _onlyExceptions = v),
+            onChanged: _busy
+                ? null
+                : (v) => setState(() => _onlyExceptions = v),
             title: const Text('只看异常 / Exceptions only'),
           ),
           ...visible.map((entry) {
             final line = entry.value;
             final product = line.isMatched
                 ? _products
-                    .where((p) => p.id == line.matchedProductId)
-                    .firstOrNull
+                      .where((p) => p.id == line.matchedProductId)
+                      .firstOrNull
                 : null;
-            final stockAfter =
-                product == null ? null : product.stock + line.stockQuantity;
+            final stockAfter = product == null
+                ? null
+                : product.stock + line.stockQuantity;
             return Card(
               child: InkWell(
                 onTap: _busy ? null : () => _editLine(entry.key),
@@ -985,32 +1007,32 @@ class _PurchaseOcrScreenState extends State<PurchaseOcrScreen> {
   }
 
   Widget _warningTile(PurchaseWarning w) => Card(
-        color: w.level == PurchaseWarningLevel.error
-            ? const Color(0xFFFFECEC)
-            : const Color(0xFFFFF7E6),
-        child: ListTile(
-          dense: true,
-          leading: Icon(
-            w.level == PurchaseWarningLevel.error
-                ? Icons.error_outline
-                : Icons.warning_amber_rounded,
-          ),
-          title: Text(w.message),
-        ),
-      );
+    color: w.level == PurchaseWarningLevel.error
+        ? const Color(0xFFFFECEC)
+        : const Color(0xFFFFF7E6),
+    child: ListTile(
+      dense: true,
+      leading: Icon(
+        w.level == PurchaseWarningLevel.error
+            ? Icons.error_outline
+            : Icons.warning_amber_rounded,
+      ),
+      title: Text(w.message),
+    ),
+  );
 
   Widget _warningInline(PurchaseWarning w) => Padding(
-        padding: const EdgeInsets.only(top: 4),
-        child: Text(
-          '⚠ ${w.message}',
-          style: TextStyle(
-            fontSize: 12,
-            color: w.level == PurchaseWarningLevel.error
-                ? CnkhColors.danger
-                : const Color(0xFF8A6500),
-          ),
-        ),
-      );
+    padding: const EdgeInsets.only(top: 4),
+    child: Text(
+      '⚠ ${w.message}',
+      style: TextStyle(
+        fontSize: 12,
+        color: w.level == PurchaseWarningLevel.error
+            ? CnkhColors.danger
+            : const Color(0xFF8A6500),
+      ),
+    ),
+  );
 }
 
 class PurchaseDetailScreen extends StatefulWidget {
@@ -1030,7 +1052,9 @@ class PurchaseDetailScreen extends StatefulWidget {
 }
 
 class _PurchaseDetailScreenState extends State<PurchaseDetailScreen> {
-  late final PurchaseOcrRepository _ocrRepo = PurchaseOcrRepository(widget.repo);
+  late final PurchaseOcrRepository _ocrRepo = PurchaseOcrRepository(
+    widget.repo,
+  );
   Map<String, Object?>? _purchase;
   bool _loading = true;
 
@@ -1069,18 +1093,12 @@ class _PurchaseDetailScreenState extends State<PurchaseDetailScreen> {
                     value: 'Duplicate entry',
                     child: Text('重复入库'),
                   ),
-                  DropdownMenuItem(
-                    value: 'OCR error',
-                    child: Text('OCR 识别错误'),
-                  ),
+                  DropdownMenuItem(value: 'OCR error', child: Text('OCR 识别错误')),
                   DropdownMenuItem(
                     value: 'Supplier invoice error',
                     child: Text('供应商单据错误'),
                   ),
-                  DropdownMenuItem(
-                    value: 'Cancelled',
-                    child: Text('进货取消'),
-                  ),
+                  DropdownMenuItem(value: 'Cancelled', child: Text('进货取消')),
                   DropdownMenuItem(value: 'Other', child: Text('其他')),
                 ],
                 onChanged: (v) => setLocal(() => reason = v ?? reason),
@@ -1124,16 +1142,16 @@ class _PurchaseDetailScreenState extends State<PurchaseDetailScreen> {
       }
       await _load();
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('进货已撤销，库存已生成反向流水')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('进货已撤销，库存已生成反向流水')));
       }
     } catch (e) {
       await _load();
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('$e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('$e')));
       }
     }
   }

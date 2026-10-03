@@ -197,6 +197,39 @@ Future<void> queueMutation(
   }
 }
 
+Future<List<Map<String, Object?>>> listSaleVoidNeedsReview(
+  DatabaseExecutor db,
+) {
+  return db.rawQuery('''
+    SELECT o.id, o.entity_id, o.last_error, s.receipt_no
+    FROM sync_outbox o LEFT JOIN sales s ON s.id=o.entity_id
+    WHERE o.kind='sale_void' AND o.delivery_state='needs_review'
+    ORDER BY o.seq ASC
+  ''');
+}
+
+/// Requeues the existing operation after an operator checks the tax state.
+/// Its id and payload remain unchanged so Desktop can safely deduplicate a
+/// request whose ACK was lost.
+Future<void> requeueSaleVoidAfterReview(Database db, String operationId) async {
+  await db.transaction((txn) async {
+    final rows = await txn.query(
+      'sync_outbox',
+      columns: const ['id'],
+      where: "id=? AND kind='sale_void' AND delivery_state='needs_review'",
+      whereArgs: [operationId],
+      limit: 1,
+    );
+    if (rows.isEmpty) throw StateError('销售作废请求已变化，请刷新同步状态');
+    await txn.update(
+      'sync_outbox',
+      {'delivery_state': 'pending', 'last_error': ''},
+      where: 'id=?',
+      whereArgs: [operationId],
+    );
+  });
+}
+
 class AsyncMutex {
   Future<void> _tail = Future.value();
   Future<T> run<T>(Future<T> Function() action) {

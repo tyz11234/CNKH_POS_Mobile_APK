@@ -76,7 +76,10 @@ Grand Total RM 1,592.57''',
     const matcher = ProductMatchService();
 
     test('normalizes common OCR letter-number confusion', () {
-      expect(matcher.normalizeName('COCA C0LA'), matcher.normalizeName('Coca Cola'));
+      expect(
+        matcher.normalizeName('COCA C0LA'),
+        matcher.normalizeName('Coca Cola'),
+      );
     });
 
     test('ranks normalized product as high confidence', () {
@@ -129,17 +132,17 @@ Grand Total RM 1,592.57''',
       int subtotal = 3840,
       double conversion = 1,
     }) => PurchaseDraftLine(
-          id: 'l1',
-          rawText: 'Coca Cola $qty 3.20',
-          rawProductName: 'Coca Cola',
-          matchedProductId: 'p1',
-          matchedProductName: 'Coca Cola',
-          matchConfidence: 1,
-          quantity: qty,
-          unitCostCents: cost,
-          lineSubtotalCents: subtotal,
-          conversionFactor: conversion,
-        );
+      id: 'l1',
+      rawText: 'Coca Cola $qty 3.20',
+      rawProductName: 'Coca Cola',
+      matchedProductId: 'p1',
+      matchedProductName: 'Coca Cola',
+      matchConfidence: 1,
+      quantity: qty,
+      unitCostCents: cost,
+      lineSubtotalCents: subtotal,
+      conversionFactor: conversion,
+    );
 
     test('flags quantity and line math anomalies without changing numbers', () {
       final input = line(qty: 72, subtotal: 3840);
@@ -159,7 +162,9 @@ Grand Total RM 1,592.57''',
     test('rejects zero, negative, NaN and infinite conversion factors', () {
       for (final conversion in [0.0, -24.0, double.nan, double.infinity]) {
         final warnings = validator.validateLine(line(conversion: conversion));
-        final invalid = warnings.where((w) => w.code == 'invalid_conversion_factor');
+        final invalid = warnings.where(
+          (w) => w.code == 'invalid_conversion_factor',
+        );
         expect(invalid, isNotEmpty);
         expect(invalid.first.level, PurchaseWarningLevel.error);
       }
@@ -252,6 +257,10 @@ Grand Total RM 1,592.57''',
       double qty = 5,
       double conversion = 1,
       int unitCostCents = 320,
+      String unit = 'PCS',
+      String rawName = 'Coca Cola',
+      String? matchedProductId = 'p1',
+      bool userModified = false,
     }) {
       final subtotal = (qty * unitCostCents).round();
       return PurchaseDraft(
@@ -260,23 +269,24 @@ Grand Total RM 1,592.57''',
         supplierName: 'ABC Trading',
         invoiceNo: invoiceNo,
         invoiceDate: '2026-09-06',
-        ocrRawText: 'Coca Cola $qty PCS',
+        ocrRawText: '$rawName $qty $unit',
         lines: [
           PurchaseDraftLine(
             id: 'line-$draftId',
-            rawText: 'Coca Cola $qty PCS',
-            rawProductName: 'Coca Cola',
-            matchedProductId: 'p1',
-            matchedProductName: 'Coca Cola',
-            matchConfidence: 1,
+            rawText: '$rawName $qty $unit',
+            rawProductName: rawName,
+            matchedProductId: matchedProductId,
+            matchedProductName: matchedProductId == null ? '' : 'Coca Cola',
+            matchConfidence: matchedProductId == null ? 0 : 1,
             quantity: qty,
-            unit: 'PCS',
+            unit: unit,
             unitCostCents: unitCostCents,
             lineSubtotalCents: subtotal,
             originalQuantity: qty,
             originalUnitCostCents: unitCostCents,
             originalLineSubtotalCents: subtotal,
             conversionFactor: conversion,
+            userModified: userModified,
           ),
         ],
         invoiceTotalCents: subtotal,
@@ -285,6 +295,137 @@ Grand Total RM 1,592.57''',
       );
     }
 
+    test(
+      'reuses supplier unit conversion and cost in next OCR draft and outbox',
+      () async {
+        final first = draft(
+          draftId: 'case-first',
+          invoiceNo: 'INV-CASE-1',
+          qty: 2,
+          unit: 'Carton',
+          conversion: 12,
+          unitCostCents: 12000,
+        );
+        await ocrRepo.commitDraft(first, operator: 'admin');
+        final nextOcr = draft(
+          draftId: 'case-second',
+          invoiceNo: 'INV-CASE-2',
+          qty: 2,
+          unit: 'carton',
+          unitCostCents: 12000,
+          matchedProductId: null,
+        );
+        final prepared = await ocrRepo.prepareDraft(nextOcr);
+        expect(prepared.lines.single.matchedProductId, 'p1');
+        expect(prepared.lines.single.conversionFactor, 12);
+        expect(prepared.lines.single.stockQuantity, 24);
+        expect(prepared.lines.single.baseUnitCostCents, 1000);
+        expect(
+          prepared.lines.single.warnings.any(
+            (warning) => warning.code == 'supplier_memory_unit_conflict',
+          ),
+          isFalse,
+        );
+
+        final purchaseId = await ocrRepo.commitDraft(
+          prepared,
+          operator: 'admin',
+        );
+        expect((await posRepo.getProduct('p1'))!.stock, 58);
+        expect((await posRepo.getProduct('p1'))!.costCents, 1000);
+        final outbox = (await (await database.db).query(
+          'sync_outbox',
+          where: "kind='purchase' AND entity_id=?",
+          whereArgs: [purchaseId],
+        )).single;
+        final payload = jsonDecode(outbox['payload_json'] as String) as Map;
+        final remoteLine = (payload['lines'] as List).single as Map;
+        expect(remoteLine['qty'], 24);
+        expect(remoteLine['conversionFactor'], 12);
+        expect(remoteLine['unitCostCents'], 1000);
+      },
+    );
+
+    test(
+      'edited alias is reused, unit conflict blocks commit, manual choice wins',
+      () async {
+        await ocrRepo.commitDraft(
+          draft(
+            draftId: 'alias-seed',
+            invoiceNo: 'INV-ALIAS-SEED',
+            qty: 1,
+            unit: 'Carton',
+            conversion: 12,
+            unitCostCents: 12000,
+          ),
+          operator: 'admin',
+        );
+        final alias = (await ocrRepo.listAliases(supplierId: 's1')).single;
+        await ocrRepo.updateAlias(
+          aliasId: alias['id'] as String,
+          productId: 'p1',
+          unit: 'Case',
+          conversionFactor: 24,
+        );
+
+        final editedAliasDraft = await ocrRepo.prepareDraft(
+          draft(
+            draftId: 'alias-edited',
+            invoiceNo: 'INV-ALIAS-EDITED',
+            qty: 2,
+            unit: 'case',
+            unitCostCents: 24000,
+            matchedProductId: null,
+          ),
+        );
+        expect(editedAliasDraft.lines.single.conversionFactor, 24);
+
+        final conflict = await ocrRepo.prepareDraft(
+          draft(
+            draftId: 'alias-conflict',
+            invoiceNo: 'INV-ALIAS-CONFLICT',
+            qty: 2,
+            unit: 'box',
+            unitCostCents: 24000,
+            matchedProductId: null,
+          ),
+        );
+        expect(
+          conflict.lines.single.warnings.any(
+            (warning) => warning.code == 'supplier_memory_unit_conflict',
+          ),
+          isTrue,
+        );
+        await expectLater(
+          ocrRepo.commitDraft(conflict, operator: 'admin'),
+          throwsA(isA<StateError>()),
+        );
+
+        final manual = await ocrRepo.prepareDraft(
+          draft(
+            draftId: 'alias-manual',
+            invoiceNo: 'INV-ALIAS-MANUAL',
+            qty: 2,
+            unit: 'box',
+            conversion: 3,
+            unitCostCents: 24000,
+            matchedProductId: 'p1',
+            userModified: true,
+          ),
+        );
+        expect(manual.lines.single.conversionFactor, 3);
+        expect(
+          manual.lines.single.warnings.any(
+            (warning) => warning.code == 'supplier_memory_unit_conflict',
+          ),
+          isFalse,
+        );
+        await ocrRepo.commitDraft(manual, operator: 'admin');
+        expect((await posRepo.getProduct('p1'))!.stock, 28);
+        expect((await posRepo.getProduct('p1'))!.costCents, 8000);
+      },
+    );
+
     test('commit is atomic and reversal restores stock once', () async {
       final input = await ocrRepo.validateDraft(draft(draftId: 'd1'));
       final purchaseId = await ocrRepo.commitDraft(input, operator: 'admin');
@@ -292,11 +433,14 @@ Grand Total RM 1,592.57''',
       final afterCommit = await posRepo.getProduct('p1');
       expect(afterCommit!.stock, 15);
       expect(afterCommit.costCents, 320);
-      final committed=(await (await database.db).query(
-        'purchases',where:'id=?',whereArgs:[purchaseId],
+      final committed = (await (await database.db).query(
+        'purchases',
+        where: 'id=?',
+        whereArgs: [purchaseId],
       )).single;
-      final committedLines=jsonDecode(committed['lines_json'] as String) as List;
-      expect((committedLines.single as Map)['beforeCostCents'],300);
+      final committedLines =
+          jsonDecode(committed['lines_json'] as String) as List;
+      expect((committedLines.single as Map)['beforeCostCents'], 300);
       final alias = await ocrRepo.lookupAlias('s1', 'Coca Cola');
       expect(alias?['product_id'], 'p1');
 
@@ -319,10 +463,12 @@ Grand Total RM 1,592.57''',
 
       final db = await database.db;
       expect(
-        Sqflite.firstIntValue(await db.rawQuery(
-          'SELECT COUNT(*) FROM purchase_reversals WHERE purchase_id=?',
-          [purchaseId],
-        )),
+        Sqflite.firstIntValue(
+          await db.rawQuery(
+            'SELECT COUNT(*) FROM purchase_reversals WHERE purchase_id=?',
+            [purchaseId],
+          ),
+        ),
         1,
       );
     });
@@ -335,17 +481,20 @@ Grand Total RM 1,592.57''',
       expect((await posRepo.getProduct('p1'))!.stock, 15);
       final db = await database.db;
       expect(
-        Sqflite.firstIntValue(await db.rawQuery(
-          'SELECT COUNT(*) FROM purchases WHERE draft_id=?',
-          ['same-draft'],
-        )),
+        Sqflite.firstIntValue(
+          await db.rawQuery('SELECT COUNT(*) FROM purchases WHERE draft_id=?', [
+            'same-draft',
+          ]),
+        ),
         1,
       );
     });
 
     test('same supplier and invoice number is blocked by default', () async {
       await ocrRepo.commitDraft(
-        await ocrRepo.validateDraft(draft(draftId: 'first', invoiceNo: 'INV-DUP')),
+        await ocrRepo.validateDraft(
+          draft(draftId: 'first', invoiceNo: 'INV-DUP'),
+        ),
         operator: 'admin',
       );
       expect(
@@ -375,8 +524,12 @@ Grand Total RM 1,592.57''',
         operator: 'admin',
       );
       final db = await database.db;
-      final later = DateTime.now().add(const Duration(seconds: 1)).toIso8601String();
-      await db.rawUpdate('UPDATE products SET stock=stock-1 WHERE id=?', ['p1']);
+      final later = DateTime.now()
+          .add(const Duration(seconds: 1))
+          .toIso8601String();
+      await db.rawUpdate('UPDATE products SET stock=stock-1 WHERE id=?', [
+        'p1',
+      ]);
       await db.insert('stock_moves', {
         'id': AppDatabase.newId(),
         'product_id': 'p1',

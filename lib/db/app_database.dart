@@ -25,8 +25,8 @@ class AppDatabase {
   static final AppDatabase instance = AppDatabase._();
 
   AppDatabase.forTesting(String path, {bool seed = false})
-      : _testPath = path,
-        _seedData = seed;
+    : _testPath = path,
+      _seedData = seed;
   String? _testPath;
   bool _seedData = true;
   Database? _db;
@@ -38,9 +38,9 @@ class AppDatabase {
   }
 
   Future<Database> get db => _opening ??= _open().catchError((Object e) {
-        _opening = null;
-        throw e;
-      });
+    _opening = null;
+    throw e;
+  });
   static bool _ffiReady = false;
 
   static void ensureFfi() {
@@ -77,8 +77,9 @@ class AppDatabase {
   Future<Database> _open() async {
     if (_db != null) return _db!;
     ensureFfi();
-    final dir =
-        _testPath == null ? await getApplicationDocumentsDirectory() : null;
+    final dir = _testPath == null
+        ? await getApplicationDocumentsDirectory()
+        : null;
     final path = _testPath ?? p.join(dir!.path, 'cnkh_pos_mobile.db');
     _db = await openDatabase(
       path,
@@ -87,7 +88,8 @@ class AppDatabase {
       onUpgrade: _onUpgrade,
       onOpen: (db) async {
         await db.execute('PRAGMA foreign_keys = ON');
-        final count = Sqflite.firstIntValue(
+        final count =
+            Sqflite.firstIntValue(
               await db.rawQuery('SELECT COUNT(*) FROM products'),
             ) ??
             0;
@@ -315,16 +317,12 @@ CREATE TABLE IF NOT EXISTS categories (
       for (final row in cats) {
         final name = (row['category'] as String?)?.trim() ?? '';
         if (name.isEmpty) continue;
-        await db.insert(
-          'categories',
-          {
-            'id': newId(),
-            'name': name,
-            'is_deleted': 0,
-            'updated_at': DateTime.now().toIso8601String(),
-          },
-          conflictAlgorithm: ConflictAlgorithm.ignore,
-        );
+        await db.insert('categories', {
+          'id': newId(),
+          'name': name,
+          'is_deleted': 0,
+          'updated_at': DateTime.now().toIso8601String(),
+        }, conflictAlgorithm: ConflictAlgorithm.ignore);
       }
     }
     if (oldVersion < 6) {
@@ -354,8 +352,8 @@ CREATE TABLE IF NOT EXISTS barcode_print_queue (
 
   Future<void> _seed(Database db) async {
     final catalogRaw = await rootBundle.loadString('assets/catalog.json');
-    final catalog =
-        (jsonDecode(catalogRaw) as List).cast<Map<String, dynamic>>();
+    final catalog = (jsonDecode(catalogRaw) as List)
+        .cast<Map<String, dynamic>>();
     final batch = db.batch();
     for (final j in catalog) {
       final p = Product.fromJson(j);
@@ -366,8 +364,8 @@ CREATE TABLE IF NOT EXISTS barcode_print_queue (
       );
     }
     final custRaw = await rootBundle.loadString('assets/seed_customers.json');
-    for (final j in
-        (jsonDecode(custRaw) as List).cast<Map<String, dynamic>>()) {
+    for (final j
+        in (jsonDecode(custRaw) as List).cast<Map<String, dynamic>>()) {
       batch.insert('customers', {
         'id': j['id'],
         'name': j['name'],
@@ -377,8 +375,7 @@ CREATE TABLE IF NOT EXISTS barcode_print_queue (
       }, conflictAlgorithm: ConflictAlgorithm.ignore);
     }
     final supRaw = await rootBundle.loadString('assets/seed_suppliers.json');
-    for (final j in
-        (jsonDecode(supRaw) as List).cast<Map<String, dynamic>>()) {
+    for (final j in (jsonDecode(supRaw) as List).cast<Map<String, dynamic>>()) {
       batch.insert('suppliers', {
         'id': j['id'],
         'name': j['name'],
@@ -393,53 +390,65 @@ CREATE TABLE IF NOT EXISTS barcode_print_queue (
         'id': 'u1',
         'username': 'admin',
         'display_name': 'Store Admin',
-        'role': 'ADMIN'
+        'role': 'ADMIN',
       },
       {
         'id': 'u2',
         'username': 'staff',
         'display_name': 'Cashier 1',
-        'role': 'STAFF'
+        'role': 'STAFF',
       },
       {
         'id': 'u3',
         'username': 'staff2',
         'display_name': 'Cashier 2',
-        'role': 'STAFF'
+        'role': 'STAFF',
       },
     ]) {
-      batch.insert(
-        'demo_users',
-        {...u, 'is_active': 1},
-        conflictAlgorithm: ConflictAlgorithm.ignore,
-      );
+      batch.insert('demo_users', {
+        ...u,
+        'is_active': 1,
+      }, conflictAlgorithm: ConflictAlgorithm.ignore);
     }
-    batch.insert(
-      'settings',
-      {'key': 'store_name', 'value': '黄金发宝号'},
-      conflictAlgorithm: ConflictAlgorithm.ignore,
-    );
-    batch.insert(
-      'settings',
-      {'key': 'product_images_enabled', 'value': '0'},
-      conflictAlgorithm: ConflictAlgorithm.ignore,
-    );
-    batch.insert(
-      'settings',
-      {'key': 'bt_printer_enabled', 'value': '0'},
-      conflictAlgorithm: ConflictAlgorithm.ignore,
-    );
-    batch.insert(
-      'settings',
-      {'key': 'low_stock_threshold', 'value': '10'},
-      conflictAlgorithm: ConflictAlgorithm.ignore,
-    );
+    batch.insert('settings', {
+      'key': 'store_name',
+      'value': '黄金发宝号',
+    }, conflictAlgorithm: ConflictAlgorithm.ignore);
+    batch.insert('settings', {
+      'key': 'product_images_enabled',
+      'value': '0',
+    }, conflictAlgorithm: ConflictAlgorithm.ignore);
+    batch.insert('settings', {
+      'key': 'bt_printer_enabled',
+      'value': '0',
+    }, conflictAlgorithm: ConflictAlgorithm.ignore);
+    batch.insert('settings', {
+      'key': 'low_stock_threshold',
+      'value': '10',
+    }, conflictAlgorithm: ConflictAlgorithm.ignore);
     await batch.commit(noResult: true);
   }
 
   Future<void> clearDemoTransactionalData() async {
     final d = await db;
     await d.transaction((txn) async {
+      // A purchase/attachment/reversal request may have reached Desktop even
+      // when its ACK was lost. Keep every local transaction and attachment
+      // until those operation IDs are acknowledged; unrelated outbox entries
+      // are never deleted by this maintenance action.
+      final pendingPurchase = await txn.query(
+        'sync_outbox',
+        columns: const ['id', 'kind', 'delivery_state'],
+        where: "kind IN ('purchase','purchase_attachment','purchase_reverse')",
+        orderBy: 'seq ASC',
+        limit: 1,
+      );
+      if (pendingPurchase.isNotEmpty) {
+        throw StateError(
+          '无法清除交易：仍有未确认的进货、附件或进货撤销同步请求。'
+          '请先完成同步并确认电脑已收到，再重试。',
+        );
+      }
       for (final table in [
         'purchase_attachments',
         'purchase_audit_log',
@@ -522,11 +531,10 @@ CREATE TABLE IF NOT EXISTS barcode_print_queue (
         .replaceAll('-', '')
         .substring(0, 4)
         .toUpperCase();
-    await d.insert(
-      'settings',
-      {'key': 'mobile_device_code', 'value': code},
-      conflictAlgorithm: ConflictAlgorithm.replace,
-    );
+    await d.insert('settings', {
+      'key': 'mobile_device_code',
+      'value': code,
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
     return code;
   }
 
@@ -549,17 +557,11 @@ CREATE TABLE IF NOT EXISTS barcode_print_queue (
     );
   }
 
-  Future<String> nextHoldNo() => _reserveNumber(
-    table: 'held_orders',
-    column: 'hold_no',
-    prefix: 'H-',
-  );
+  Future<String> nextHoldNo() =>
+      _reserveNumber(table: 'held_orders', column: 'hold_no', prefix: 'H-');
 
-  Future<String> nextPurchaseNo() => _reserveNumber(
-    table: 'purchases',
-    column: 'purchase_no',
-    prefix: 'PO-',
-  );
+  Future<String> nextPurchaseNo() =>
+      _reserveNumber(table: 'purchases', column: 'purchase_no', prefix: 'PO-');
 
   Future<String> _reserveNumber({
     required String table,
@@ -576,12 +578,14 @@ CREATE TABLE IF NOT EXISTS barcode_print_queue (
       );
     }
     final d = await db;
-    return d.transaction((txn) => reserveDocumentNumber(
-      txn,
-      table: table,
-      column: column,
-      prefix: prefix,
-    ));
+    return d.transaction(
+      (txn) => reserveDocumentNumber(
+        txn,
+        table: table,
+        column: column,
+        prefix: prefix,
+      ),
+    );
   }
 
   static String newId() => const Uuid().v4();

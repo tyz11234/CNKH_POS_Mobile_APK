@@ -133,9 +133,7 @@ class LanSyncClient {
   Future<String> pullSales(LanSyncConfig cfg) => synchronize(cfg);
   Future<String> pushSales(LanSyncConfig cfg) => _mutex.run(() async {
     final deferredError = await _drainPending(cfg);
-    return deferredError == null
-        ? '待同步操作已上传'
-        : '销售已上传；$deferredError';
+    return deferredError == null ? '待同步操作已上传' : '销售已上传；$deferredError';
   });
   Future<String> synchronize(
     LanSyncConfig cfg, {
@@ -178,7 +176,9 @@ class LanSyncClient {
     final hostStockCursor = (h['stock_moves_cursor'] as num?)?.toInt() ?? 0;
     final localStockCursor =
         int.tryParse(await repo.getSetting('lan_sync_stock_moves_cursor')) ?? 0;
-    final fullStockMoves = full || catalogCursorRolledBack ||
+    final fullStockMoves =
+        full ||
+        catalogCursorRolledBack ||
         (stockMovesSupported && hostStockCursor < localStockCursor);
     final a = await _pullCatalog(
       cfg,
@@ -192,54 +192,86 @@ class LanSyncClient {
         await _pullEInvoiceStatuses(cfg);
         await repo.setSetting('einvoice_status_sync_error', '');
       } catch (_) {
-        await repo.setSetting('einvoice_status_sync_error', 'e-Invoice 状态同步失败，保留上次结果；销售同步已完成。');
+        await repo.setSetting(
+          'einvoice_status_sync_error',
+          'e-Invoice 状态同步失败，保留上次结果；销售同步已完成。',
+        );
       }
     }
     await _syncImages(cfg);
     lastError = deferredError;
     await repo.setSetting('lan_sync_last_error', deferredError ?? '');
-    return deferredError == null
-        ? '$a\n$b'
-        : '$a\n$b\n$deferredError；其他同步已继续';
+    return deferredError == null ? '$a\n$b' : '$a\n$b\n$deferredError；其他同步已继续';
   });
 
   Future<void> _syncImages(LanSyncConfig cfg) async {
     if (!await repo.productImagesEnabled()) return;
     final db = await _db.db;
-    final pending = await ProductImageSyncQueue(db, cfg.normalizedBase, now: _imageClock).drain((job) async {
-      final id = job['localId'] as String;
-      if (job['hasImage'] == true) {
-        await pullProductImage(cfg, pcId: job['remoteId'] as String, localProductId: id);
-      } else {
-        await ProductImageStore().delete(id);
-        await db.update('products', {'image_path': ''}, where: 'id=?', whereArgs: [id]);
-      }
-    });
-    await repo.setSetting('product_image_sync_error', pending == 0 ? '' : '有 $pending 张商品图片待同步，后台将自动重试。');
+    final pending =
+        await ProductImageSyncQueue(
+          db,
+          cfg.normalizedBase,
+          now: _imageClock,
+        ).drain((job) async {
+          final id = job['localId'] as String;
+          if (job['hasImage'] == true) {
+            await pullProductImage(
+              cfg,
+              pcId: job['remoteId'] as String,
+              localProductId: id,
+            );
+          } else {
+            await ProductImageStore().delete(id);
+            await db.update(
+              'products',
+              {'image_path': ''},
+              where: 'id=?',
+              whereArgs: [id],
+            );
+          }
+        });
+    await repo.setSetting(
+      'product_image_sync_error',
+      pending == 0 ? '' : '有 $pending 张商品图片待同步，后台将自动重试。',
+    );
   }
 
   Future<void> _pullEInvoiceStatuses(LanSyncConfig cfg) async {
     final rows = <Map<String, dynamic>>[];
     var after = '';
     while (true) {
-      final uri = Uri.parse('${cfg.normalizedBase}/api/v1/einvoices').replace(queryParameters: {'after': after, 'status_version': '2'});
-      final response = await _requestClient.get(uri, headers: _headers(cfg)).timeout(const Duration(seconds: 20));
+      final uri = Uri.parse(
+        '${cfg.normalizedBase}/api/v1/einvoices',
+      ).replace(queryParameters: {'after': after, 'status_version': '2'});
+      final response = await _requestClient
+          .get(uri, headers: _headers(cfg))
+          .timeout(const Duration(seconds: 20));
       if (response.statusCode != 200) throw StateError('Status sync failed');
       final data = jsonDecode(response.body) as Map<String, dynamic>;
       final items = data['items'] as List;
       rows.addAll(items.map((r) => Map<String, dynamic>.from(r as Map)));
       if (data['has_more'] != true) break;
       final next = data['next'] as String;
-      if (next.compareTo(after) <= 0 || rows.length > 100000) throw const FormatException('Invalid status pagination');
+      if (next.compareTo(after) <= 0 || rows.length > 100000)
+        throw const FormatException('Invalid status pagination');
       after = next;
     }
-    await EInvoiceStatusStore(await _db.db).replaceSnapshot(cfg.normalizedBase, rows);
+    await EInvoiceStatusStore(
+      await _db.db,
+    ).replaceSnapshot(cfg.normalizedBase, rows);
   }
 
   Future<String?> _drainPending(LanSyncConfig cfg) async {
     final d = await _db.db;
     final deferredIds = <String>{};
     final deferredErrors = <String>[];
+    const independentAfterSaleReview = {
+      'customer_upsert',
+      'supplier_upsert',
+      'category_upsert',
+      'purchase_attachment',
+    };
+    var saleReviewBarrier = false;
     while ((Sqflite.firstIntValue(
               await d.rawQuery(
                 "SELECT COUNT(*) FROM sales s WHERE (s.synced_at IS NULL OR s.synced_at='') AND NOT EXISTS (SELECT 1 FROM sync_outbox o WHERE o.kind='sale_upload' AND o.entity_id=s.id)",
@@ -253,15 +285,30 @@ class LanSyncClient {
       final rows = await d.query('sync_outbox', orderBy: 'seq ASC');
       Map<String, Object?>? op;
       for (final row in rows) {
-        if (!deferredIds.contains(row['id']?.toString() ?? '')) {
-          op = row;
-          break;
+        final id = row['id']?.toString() ?? '';
+        if (deferredIds.contains(id)) continue;
+        if (saleReviewBarrier &&
+            !independentAfterSaleReview.contains(row['kind'])) {
+          deferredIds.add(id);
+          continue;
         }
+        op = row;
+        break;
       }
       if (op == null) break;
       final current = op;
       final operationId = op['id']?.toString() ?? '';
-      if (op['delivery_state'] == 'needs_review') throw StateError('${op['last_error']}');
+      if (op['delivery_state'] == 'needs_review') {
+        if (op['kind'] != 'sale_void') {
+          throw StateError('${op['last_error']}');
+        }
+        saleReviewBarrier = true;
+        deferredIds.add(operationId);
+        deferredErrors.add(
+          '销售作废待核对；请求 ${op['entity_id']} 已保留：${op['last_error']}',
+        );
+        continue;
+      }
       try {
         if (op['kind'] == 'sale_upload') {
           await _pushSales(
@@ -270,7 +317,8 @@ class LanSyncClient {
             originalState: !await _canUploadCancelledSale(d, op),
           );
         } else {
-          final res = await _requestClient.post(
+          final res = await _requestClient
+              .post(
                 Uri.parse('${cfg.normalizedBase}/api/v1/mutations'),
                 headers: _headers(cfg),
                 body: jsonEncode({
@@ -290,39 +338,75 @@ class LanSyncClient {
           if (body['ok'] != true ||
               !(body['acknowledged'] as List? ?? []).contains(op['id'])) {
             final rejected = body['rejected_operation'];
-            if (res.statusCode == 200 && op['kind'] == 'purchase_reverse' &&
-                rejected is Map && rejected['id'] == operationId &&
+            if (res.statusCode == 200 &&
+                op['kind'] == 'purchase_reverse' &&
+                rejected is Map &&
+                rejected['id'] == operationId &&
                 rejected['kind'] == 'purchase_reverse' &&
                 rejected['code'] == 'purchase_reverse_rejected') {
               final error = '${body['error'] ?? 'Desktop 拒绝撤销'}';
-              final recovered = await d.transaction((txn) => rejectPurchaseReverse(txn, current, error));
+              final recovered = await d.transaction(
+                (txn) => rejectPurchaseReverse(txn, current, error),
+              );
               if (recovered) {
                 deferredIds.add(operationId);
                 deferredErrors.add('进货撤销被 Desktop 拒绝，请核对；原请求已保留：$error');
                 continue;
               }
             }
+            if (res.statusCode == 200 &&
+                op['kind'] == 'sale_void' &&
+                rejected is Map &&
+                rejected['id'] == operationId &&
+                rejected['kind'] == 'sale_void' &&
+                rejected['code'] == 'sale_void_requires_review') {
+              final error = '${body['error'] ?? 'Desktop 要求先核对 e-Invoice 状态'}';
+              await d.update(
+                'sync_outbox',
+                {'last_error': error, 'delivery_state': 'needs_review'},
+                where: 'id=?',
+                whereArgs: [operationId],
+              );
+              saleReviewBarrier = true;
+              deferredIds.add(operationId);
+              deferredErrors.add('销售作废待核对；请求 $operationId 已保留：$error');
+              continue;
+            }
             throw StateError('${body['error'] ?? '操作未获电脑确认'}');
           }
           await d.transaction((txn) async {
             for (final raw in body['entity_mappings'] as List? ?? const []) {
-              if (raw is! Map || raw['entity'] != 'product' ||
+              if (raw is! Map ||
+                  raw['entity'] != 'product' ||
                   raw['local_id'] != current['entity_id'] ||
                   '${raw['remote_id'] ?? ''}'.isEmpty) {
                 throw StateError('商品关联 ACK 无效，原请求保留');
               }
-              await rememberEntityId(txn, 'product', raw['remote_id'], raw['local_id'] as String);
+              await rememberEntityId(
+                txn,
+                'product',
+                raw['remote_id'],
+                raw['local_id'] as String,
+              );
             }
           });
         }
         await d.transaction((txn) async {
-          if (current['kind'] == 'purchase_reverse') await acknowledgePurchaseReverse(txn, current);
-          await txn.delete('sync_outbox', where: 'id=?', whereArgs: [current['id']]);
+          if (current['kind'] == 'purchase_reverse')
+            await acknowledgePurchaseReverse(txn, current);
+          await txn.delete(
+            'sync_outbox',
+            where: 'id=?',
+            whereArgs: [current['id']],
+          );
         });
       } catch (e) {
         await d.update(
           'sync_outbox',
-          {'last_error': '$e', if (op['kind'] == 'purchase_reverse') 'delivery_state': 'pending'},
+          {
+            'last_error': '$e',
+            if (op['kind'] == 'purchase_reverse') 'delivery_state': 'pending',
+          },
           where: 'id=?',
           whereArgs: [op['id']],
         );
@@ -336,7 +420,9 @@ class LanSyncClient {
         rethrow;
       }
     }
-    final deferredError = deferredErrors.isEmpty ? null : deferredErrors.join('\n');
+    final deferredError = deferredErrors.isEmpty
+        ? null
+        : deferredErrors.join('\n');
     if (deferredError != null) {
       lastError = deferredError;
       await repo.setSetting('lan_sync_last_error', deferredError);
@@ -351,14 +437,22 @@ class LanSyncClient {
     DatabaseExecutor db,
     Map<String, Object?> upload,
   ) async {
-    final following = await db.query('sync_outbox',
-        where: 'seq>?', whereArgs: [upload['seq']], orderBy: 'seq ASC');
+    final following = await db.query(
+      'sync_outbox',
+      where: 'seq>?',
+      whereArgs: [upload['seq']],
+      orderBy: 'seq ASC',
+    );
     for (final op in following) {
       if (op['kind'] == 'sale_void' && op['entity_id'] == upload['entity_id']) {
         return true;
       }
-      if (!const {'customer_upsert', 'supplier_upsert', 'category_upsert',
-          'purchase_attachment'}.contains(op['kind'])) {
+      if (!const {
+        'customer_upsert',
+        'supplier_upsert',
+        'category_upsert',
+        'purchase_attachment',
+      }.contains(op['kind'])) {
         return false;
       }
     }
@@ -375,7 +469,8 @@ class LanSyncClient {
 
   Future<Map<String, dynamic>> health(LanSyncConfig cfg) async {
     final uri = Uri.parse('${cfg.normalizedBase}/api/v1/health');
-    final res = await _requestClient.get(uri, headers: _headers(cfg))
+    final res = await _requestClient
+        .get(uri, headers: _headers(cfg))
         .timeout(const Duration(seconds: 5));
     final body = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
     if (res.statusCode < 200 || res.statusCode >= 300) {
@@ -390,8 +485,8 @@ class LanSyncClient {
     final normalizedOldHost = oldHost.trim().isEmpty
         ? ''
         : LanSyncConfig(baseUrl: oldHost).normalizedBase;
-    final sameHost = normalizedOldHost.isNotEmpty &&
-        normalizedOldHost == cfg.normalizedBase;
+    final sameHost =
+        normalizedOldHost.isNotEmpty && normalizedOldHost == cfg.normalizedBase;
     if (oldToken.isNotEmpty && oldToken != cfg.token && !sameHost) {
       throw StateError('已有门店数据，请先同步并备份后再切换门店');
     }
@@ -430,19 +525,31 @@ class LanSyncClient {
     lastError = null;
     try {
       final imagesOn = await repo.productImagesEnabled();
-      final imageQueue = ProductImageSyncQueue(await _db.db, cfg.normalizedBase);
+      final imageQueue = ProductImageSyncQueue(
+        await _db.db,
+        cfg.normalizedBase,
+      );
       final seedImages = imagesOn && await imageQueue.needsSeed();
-      final since = seedImages ? '' : await repo.getSetting('lan_sync_products_cursor');
+      final since = seedImages
+          ? ''
+          : await repo.getSetting('lan_sync_products_cursor');
       final q = since.isEmpty
           ? ''
           : '?since=${Uri.encodeQueryComponent(since)}';
       final productsUri = Uri.parse('${cfg.normalizedBase}/api/v1/products$q');
-      final customersUri = Uri.parse('${cfg.normalizedBase}/api/v1/customers$q');
-      final suppliersUri = Uri.parse('${cfg.normalizedBase}/api/v1/suppliers$q');
-      final categoriesUri = Uri.parse('${cfg.normalizedBase}/api/v1/categories$q');
+      final customersUri = Uri.parse(
+        '${cfg.normalizedBase}/api/v1/customers$q',
+      );
+      final suppliersUri = Uri.parse(
+        '${cfg.normalizedBase}/api/v1/suppliers$q',
+      );
+      final categoriesUri = Uri.parse(
+        '${cfg.normalizedBase}/api/v1/categories$q',
+      );
 
       final stockCursor =
-          int.tryParse(await repo.getSetting('lan_sync_stock_moves_cursor')) ?? 0;
+          int.tryParse(await repo.getSetting('lan_sync_stock_moves_cursor')) ??
+          0;
       final stockSince = fullStockMoves ? '' : '$stockCursor';
       final stockMovesUri = Uri.parse(
         '${cfg.normalizedBase}/api/v1/stock-moves'
@@ -450,29 +557,40 @@ class LanSyncClient {
       );
 
       final requests = <Future<http.Response>>[
-        _requestClient.get(productsUri, headers: _headers(cfg))
+        _requestClient
+            .get(productsUri, headers: _headers(cfg))
             .timeout(const Duration(seconds: 30)),
-        _requestClient.get(customersUri, headers: _headers(cfg))
+        _requestClient
+            .get(customersUri, headers: _headers(cfg))
             .timeout(const Duration(seconds: 30)),
-        _requestClient.get(suppliersUri, headers: _headers(cfg))
+        _requestClient
+            .get(suppliersUri, headers: _headers(cfg))
             .timeout(const Duration(seconds: 30)),
-        _requestClient.get(categoriesUri, headers: _headers(cfg))
+        _requestClient
+            .get(categoriesUri, headers: _headers(cfg))
             .timeout(const Duration(seconds: 30)),
       ];
       if (stockMovesSupported) {
-        requests.add(_requestClient.get(stockMovesUri, headers: _headers(cfg))
-            .timeout(const Duration(seconds: 30)));
+        requests.add(
+          _requestClient
+              .get(stockMovesUri, headers: _headers(cfg))
+              .timeout(const Duration(seconds: 30)),
+        );
       }
       final responses = await Future.wait<http.Response>(requests);
 
       final pBody =
-          jsonDecode(utf8.decode(responses[0].bodyBytes)) as Map<String, dynamic>;
+          jsonDecode(utf8.decode(responses[0].bodyBytes))
+              as Map<String, dynamic>;
       final cBody =
-          jsonDecode(utf8.decode(responses[1].bodyBytes)) as Map<String, dynamic>;
+          jsonDecode(utf8.decode(responses[1].bodyBytes))
+              as Map<String, dynamic>;
       final sBody =
-          jsonDecode(utf8.decode(responses[2].bodyBytes)) as Map<String, dynamic>;
+          jsonDecode(utf8.decode(responses[2].bodyBytes))
+              as Map<String, dynamic>;
       final catBody =
-          jsonDecode(utf8.decode(responses[3].bodyBytes)) as Map<String, dynamic>;
+          jsonDecode(utf8.decode(responses[3].bodyBytes))
+              as Map<String, dynamic>;
       if (pBody['ok'] != true) throw StateError('products: ${pBody['error']}');
       if (cBody['ok'] != true) throw StateError('customers: ${cBody['error']}');
       if (sBody['ok'] != true) throw StateError('suppliers: ${sBody['error']}');
@@ -480,13 +598,21 @@ class LanSyncClient {
         throw StateError('categories: ${catBody['error']}');
       }
       final stockBody = stockMovesSupported
-          ? jsonDecode(utf8.decode(responses[4].bodyBytes)) as Map<String, dynamic>
+          ? jsonDecode(utf8.decode(responses[4].bodyBytes))
+                as Map<String, dynamic>
           : null;
       if (stockBody != null && stockBody['ok'] != true) {
         throw StateError('stock moves: ${stockBody['error']}');
       }
-      for (final body in [pBody, cBody, sBody, catBody, if (stockBody != null) stockBody]) {
-        if (body['items'] is! List) throw const FormatException('同步响应缺少完整 items 列表，目录未变更');
+      for (final body in [
+        pBody,
+        cBody,
+        sBody,
+        catBody,
+        if (stockBody != null) stockBody,
+      ]) {
+        if (body['items'] is! List)
+          throw const FormatException('同步响应缺少完整 items 列表，目录未变更');
       }
 
       final products = (pBody['items'] as List?) ?? [];
@@ -499,7 +625,9 @@ class LanSyncClient {
         for (final snapshot in [products, customers, suppliers, categories]) {
           final ids = <String>{};
           for (final raw in snapshot) {
-            if (raw is! Map || raw['pc_id'] == null || '${raw['pc_id']}'.isEmpty ||
+            if (raw is! Map ||
+                raw['pc_id'] == null ||
+                '${raw['pc_id']}'.isEmpty ||
                 !ids.add('${raw['pc_id']}')) {
               throw const FormatException('全量目录标识缺失或重复，目录未变更');
             }
@@ -543,8 +671,13 @@ class LanSyncClient {
           await _upsertCategory(txn, Map<String, dynamic>.from(raw as Map));
         }
         for (final raw in products) {
-          await _upsertProduct(txn, Map<String, dynamic>.from(raw as Map),
-              fullMoves: stockBody != null && (fullStockMoves || stockCursor == 0) ? stockMoves : null);
+          await _upsertProduct(
+            txn,
+            Map<String, dynamic>.from(raw as Map),
+            fullMoves: stockBody != null && (fullStockMoves || stockCursor == 0)
+                ? stockMoves
+                : null,
+          );
         }
         for (final raw in customers) {
           await _upsertCustomer(txn, Map<String, dynamic>.from(raw as Map));
@@ -566,10 +699,20 @@ class LanSyncClient {
           final remoteId = m['pc_id']?.toString() ?? '';
           final localId = await mappedLocalId(txn, 'product', remoteId);
           if (remoteId.isEmpty || localId == null) continue;
-          final local = await txn.query('products', columns: ['image_path'], where: 'id=?', whereArgs: [localId]);
-          imageJobs.add({'remoteId': remoteId, 'localId': localId,
+          final local = await txn.query(
+            'products',
+            columns: ['image_path'],
+            where: 'id=?',
+            whereArgs: [localId],
+          );
+          imageJobs.add({
+            'remoteId': remoteId,
+            'localId': localId,
             'hasImage': m['has_image'] == true && m['is_deleted'] != 1,
-            'localHasImage': local.isNotEmpty && '${local.first['image_path'] ?? ''}'.isNotEmpty});
+            'localHasImage':
+                local.isNotEmpty &&
+                '${local.first['image_path'] ?? ''}'.isNotEmpty,
+          });
         }
         for (final missing in missingProductMappings) {
           final local = await txn.query(
@@ -583,7 +726,8 @@ class LanSyncClient {
             'remoteId': missing['remoteId'],
             'localId': missing['localId'],
             'hasImage': false,
-            'localHasImage': local.isNotEmpty &&
+            'localHasImage':
+                local.isNotEmpty &&
                 '${local.single['image_path'] ?? ''}'.isNotEmpty,
           });
         }
@@ -594,20 +738,23 @@ class LanSyncClient {
               ? returnedStockCursor.toInt()
               : int.tryParse('$returnedStockCursor');
           if (parsedStockCursor != null) {
-            await txn.insert(
-              'settings',
-              {'key': 'lan_sync_stock_moves_cursor', 'value': '$parsedStockCursor'},
-              conflictAlgorithm: ConflictAlgorithm.replace,
-            );
+            await txn.insert('settings', {
+              'key': 'lan_sync_stock_moves_cursor',
+              'value': '$parsedStockCursor',
+            }, conflictAlgorithm: ConflictAlgorithm.replace);
           }
         }
         final queue = ProductImageSyncQueue(txn, cfg.normalizedBase);
         await queue.enqueue(imageJobs);
         if (seedImages) await queue.markSeeded();
-        await txn.insert('settings', {'key': 'lan_sync_products_cursor', 'value': nextCursor},
-          conflictAlgorithm: ConflictAlgorithm.replace);
-        await txn.insert('settings', {'key': 'lan_sync_last_pull',
-          'value': DateTime.now().toIso8601String()}, conflictAlgorithm: ConflictAlgorithm.replace);
+        await txn.insert('settings', {
+          'key': 'lan_sync_products_cursor',
+          'value': nextCursor,
+        }, conflictAlgorithm: ConflictAlgorithm.replace);
+        await txn.insert('settings', {
+          'key': 'lan_sync_last_pull',
+          'value': DateTime.now().toIso8601String(),
+        }, conflictAlgorithm: ConflictAlgorithm.replace);
       });
       return 'Pulled ${products.length} products, ${customers.length} customers, '
           '${suppliers.length} suppliers, ${categories.length} categories';
@@ -665,7 +812,9 @@ class LanSyncClient {
       for (final mapping in mappings) {
         final remoteId = mapping['remote_id']?.toString() ?? '';
         final localId = mapping['local_id']?.toString() ?? '';
-        if (remoteId.isEmpty || localId.isEmpty || presentIds.contains(remoteId)) {
+        if (remoteId.isEmpty ||
+            localId.isEmpty ||
+            presentIds.contains(remoteId)) {
           continue;
         }
         final changed = await txn.update(
@@ -707,8 +856,11 @@ class LanSyncClient {
         continue;
       }
       final remoteProductId = move['product_id']?.toString() ?? '';
-      final localProductId =
-          await mappedLocalId(txn, 'product', remoteProductId);
+      final localProductId = await mappedLocalId(
+        txn,
+        'product',
+        remoteProductId,
+      );
       if (localProductId == null) continue;
       final cursorValue = move['cursor'];
       final cursor = cursorValue is num
@@ -721,8 +873,11 @@ class LanSyncClient {
 
     for (final move in moves) {
       final remoteProductId = move['product_id']?.toString() ?? '';
-      final localProductId =
-          await mappedLocalId(txn, 'product', remoteProductId);
+      final localProductId = await mappedLocalId(
+        txn,
+        'product',
+        remoteProductId,
+      );
       if (localProductId == null) continue;
       final cursorValue = move['cursor'];
       final cursor = cursorValue is num
@@ -738,20 +893,17 @@ class LanSyncClient {
       }
       final remoteId = move['id']?.toString() ?? '$cursor';
       final reason = move['reason']?.toString() ?? 'unknown';
-      await txn.insert(
-        'stock_moves',
-        {
-          'id': 'desktop-stock:$remoteId',
-          'product_id': localProductId,
-          'change': deltaValue.toDouble(),
-          'reason': 'desktop_catalog_sync',
-          'created_at': move['created_at']?.toString() ??
-              DateTime.now().toIso8601String(),
-          'operator': 'desktop-sync',
-          'notes': 'Desktop $reason: ${move['notes'] ?? ''} [${move['id'] ?? cursor}]',
-        },
-        conflictAlgorithm: ConflictAlgorithm.ignore,
-      );
+      await txn.insert('stock_moves', {
+        'id': 'desktop-stock:$remoteId',
+        'product_id': localProductId,
+        'change': deltaValue.toDouble(),
+        'reason': 'desktop_catalog_sync',
+        'created_at':
+            move['created_at']?.toString() ?? DateTime.now().toIso8601String(),
+        'operator': 'desktop-sync',
+        'notes':
+            'Desktop $reason: ${move['notes'] ?? ''} [${move['id'] ?? cursor}]',
+      }, conflictAlgorithm: ConflictAlgorithm.ignore);
     }
   }
 
@@ -779,8 +931,9 @@ class LanSyncClient {
 
   Future<void> _upsertProduct(
     DatabaseExecutor txn,
-    Map<String, dynamic> m, {List<dynamic>? fullMoves}
-  ) async {
+    Map<String, dynamic> m, {
+    List<dynamic>? fullMoves,
+  }) async {
     final sku = (m['sku'] as String?) ?? '';
     final barcode = (m['barcode'] as String?) ?? '';
     final pcId = m['pc_id']?.toString() ?? '';
@@ -799,28 +952,40 @@ class LanSyncClient {
     // A tombstone refers only to its immutable Desktop ID. Reused codes must
     // never cause an older tombstone to delete a newly-created entity.
     if (existing == null) {
-      final rows = await txn.rawQuery('''
+      final rows = await txn.rawQuery(
+        '''
         SELECT p.* FROM products p WHERE p.id IN (?,?)
         AND NOT EXISTS(SELECT 1 FROM sync_entity_ids e WHERE e.entity='product'
           AND e.local_id=p.id AND e.remote_id<>?)
-      ''', ['pc-$pcId', pcId, pcId]);
+      ''',
+        ['pc-$pcId', pcId, pcId],
+      );
       if (rows.length > 1) throw StateError('同步商品 ID 存在重复资料');
       if (rows.isNotEmpty) existing = rows.single;
     }
     if (existing == null && deleted == 0) {
-      Future<Map<String, Object?>?> candidate(String column, String value) async {
+      Future<Map<String, Object?>?> candidate(
+        String column,
+        String value,
+      ) async {
         if (value.isEmpty) return null;
-        final rows = await txn.rawQuery('''
+        final rows = await txn.rawQuery(
+          '''
           SELECT p.* FROM products p WHERE p.$column=? AND p.is_deleted=0
           AND NOT EXISTS(SELECT 1 FROM sync_entity_ids e WHERE e.entity='product'
             AND e.local_id=p.id AND e.remote_id<>?) LIMIT 2
-        ''', [value, pcId]);
+        ''',
+          [value, pcId],
+        );
         if (rows.length > 1) throw StateError('同步匹配存在重复资料');
         return rows.isEmpty ? null : rows.single;
       }
+
       final byBarcode = await candidate('barcode', barcode);
       final bySku = await candidate('sku', sku);
-      if (byBarcode != null && bySku != null && byBarcode['id'] != bySku['id']) {
+      if (byBarcode != null &&
+          bySku != null &&
+          byBarcode['id'] != bySku['id']) {
         throw StateError('商品 SKU 与条码分别匹配不同实体，目录保留供核对');
       }
       existing = byBarcode ?? bySku;
@@ -858,13 +1023,23 @@ class LanSyncClient {
     );
     final previousStock = (existing?['stock'] as num?)?.toDouble();
     final seenKey = 'lan_product_catalog_seen:$pcId';
-    final firstCatalog = (await readSetting(txn, seenKey)).isEmpty &&
-        (mapped == null || (await readSetting(txn, 'lan_sync_products_cursor')).isEmpty);
-    final baseline = firstCatalog && fullMoves != null &&
-        await isProvenInitialStockBaseline(txn, remoteProductId: pcId,
-            localProductId: id, fullMoves: fullMoves);
-    await txn.insert('settings', {'key': seenKey, 'value': '1'},
-        conflictAlgorithm: ConflictAlgorithm.replace);
+    final firstCatalog =
+        (await readSetting(txn, seenKey)).isEmpty &&
+        (mapped == null ||
+            (await readSetting(txn, 'lan_sync_products_cursor')).isEmpty);
+    final baseline =
+        firstCatalog &&
+        fullMoves != null &&
+        await isProvenInitialStockBaseline(
+          txn,
+          remoteProductId: pcId,
+          localProductId: id,
+          fullMoves: fullMoves,
+        );
+    await txn.insert('settings', {
+      'key': seenKey,
+      'value': '1',
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
     await txn.insert(
       'products',
       product.toMap(),
@@ -878,10 +1053,14 @@ class LanSyncClient {
         'id': AppDatabase.newId(),
         'product_id': id,
         'change': product.stock - previousStock,
-        'reason': baseline ? 'desktop_catalog_baseline' : 'desktop_catalog_sync',
+        'reason': baseline
+            ? 'desktop_catalog_baseline'
+            : 'desktop_catalog_sync',
         'created_at': DateTime.now().toIso8601String(),
         'operator': 'desktop-sync',
-        'notes': baseline ? 'Verified initial Desktop stock baseline' : 'Desktop catalog stock reconciliation',
+        'notes': baseline
+            ? 'Verified initial Desktop stock baseline'
+            : 'Desktop catalog stock reconciliation',
       });
     }
   }
@@ -903,27 +1082,23 @@ class LanSyncClient {
       );
       if (rows.isNotEmpty) existing = rows.first;
     }
-    if (existing == null && phone.isNotEmpty) {
-      final rows = await txn.query(
-        'customers',
-        where: 'phone=? AND name=?',
-        whereArgs: [phone, name],
-        limit: 2,
+    final deleted = (m['is_deleted'] as num?)?.toInt() ?? 0;
+    if (existing == null && mapped == null && deleted == 0 && name.isNotEmpty) {
+      final rows = await txn.rawQuery(
+        '''
+        SELECT c.* FROM customers c
+        WHERE c.name=? AND c.phone=? AND c.is_deleted=0
+          AND NOT EXISTS (
+            SELECT 1 FROM sync_entity_ids e
+            WHERE e.entity='customer' AND e.local_id=c.id
+          )
+        ORDER BY c.id LIMIT 2''',
+        [name, phone],
       );
-      if (rows.length > 1) throw StateError('同步匹配存在重复资料');
+      if (rows.length > 1) throw StateError('同步匹配存在重复的未关联客户资料');
       if (rows.isNotEmpty) existing = rows.first;
     }
-    if (existing == null && name.isNotEmpty) {
-      final rows = await txn.query(
-        'customers',
-        where: 'name=? AND phone=?',
-        whereArgs: [name, phone],
-        limit: 2,
-      );
-      if (rows.length > 1) throw StateError('同步匹配存在重复资料');
-      if (rows.isNotEmpty) existing = rows.first;
-    }
-    if (existing == null && pcId != null) {
+    if (existing == null && mapped == null && pcId != null) {
       final rows = await txn.query(
         'customers',
         where: 'id IN (?,?)',
@@ -931,10 +1106,19 @@ class LanSyncClient {
         limit: 2,
       );
       if (rows.length > 1) throw StateError('同步匹配存在重复资料');
-      if (rows.isNotEmpty) existing = rows.first;
+      if (rows.isNotEmpty) {
+        final localId = rows.first['id'] as String;
+        final localMapping = await txn.query(
+          'sync_entity_ids',
+          columns: const ['remote_id'],
+          where: 'entity=? AND local_id=?',
+          whereArgs: ['customer', localId],
+          limit: 1,
+        );
+        if (localMapping.isEmpty) existing = rows.first;
+      }
     }
 
-    final deleted = (m['is_deleted'] as num?)?.toInt() ?? 0;
     if (deleted != 0) {
       if (existing != null) {
         await txn.update(
@@ -947,7 +1131,7 @@ class LanSyncClient {
       return;
     }
 
-    final id = (existing?['id'] as String?) ?? 'pc-c-$pcId';
+    final id = (existing?['id'] as String?) ?? mapped ?? 'pc-c-$pcId';
     await rememberEntityId(txn, 'customer', pcId, id);
     await txn.insert('customers', {
       'id': id,
@@ -977,27 +1161,46 @@ class LanSyncClient {
       );
       if (rows.isNotEmpty) existing = rows.first;
     }
-    if (existing == null && email.isNotEmpty) {
-      final rows = await txn.query(
-        'suppliers',
-        where: 'email=? COLLATE NOCASE',
-        whereArgs: [email],
-        limit: 2,
-      );
-      if (rows.length > 1) throw StateError('供应商同步匹配存在重复资料');
-      if (rows.isNotEmpty) existing = rows.first;
+    final deleted = (m['is_deleted'] as num?)?.toInt() ?? 0;
+    if (existing == null && mapped == null && deleted == 0) {
+      final byEmail = email.isEmpty
+          ? <Map<String, Object?>>[]
+          : await txn.rawQuery(
+              '''
+        SELECT s.* FROM suppliers s
+        WHERE s.email=? COLLATE NOCASE AND s.is_deleted=0
+          AND NOT EXISTS (
+            SELECT 1 FROM sync_entity_ids e
+            WHERE e.entity='supplier' AND e.local_id=s.id
+          )
+        ORDER BY s.id LIMIT 2''',
+              [email],
+            );
+      final byContact = name.isEmpty
+          ? <Map<String, Object?>>[]
+          : await txn.rawQuery(
+              '''
+        SELECT s.* FROM suppliers s
+        WHERE s.name=? AND s.phone=? AND s.is_deleted=0
+          AND NOT EXISTS (
+            SELECT 1 FROM sync_entity_ids e
+            WHERE e.entity='supplier' AND e.local_id=s.id
+          )
+        ORDER BY s.id LIMIT 2''',
+              [name, phone],
+            );
+      if (byEmail.length > 1 || byContact.length > 1) {
+        throw StateError('供应商同步匹配存在重复的未关联资料');
+      }
+      if (byEmail.isNotEmpty &&
+          byContact.isNotEmpty &&
+          byEmail.single['id'] != byContact.single['id']) {
+        throw StateError('新供应商邮箱与名称/电话匹配到不同未关联资料');
+      }
+      if (byEmail.isNotEmpty) existing = byEmail.single;
+      if (byContact.isNotEmpty) existing = byContact.single;
     }
-    if (existing == null && name.isNotEmpty) {
-      final rows = await txn.query(
-        'suppliers',
-        where: 'name=? AND phone=?',
-        whereArgs: [name, phone],
-        limit: 2,
-      );
-      if (rows.length > 1) throw StateError('供应商同步匹配存在重复资料');
-      if (rows.isNotEmpty) existing = rows.first;
-    }
-    if (existing == null && pcId != null) {
+    if (existing == null && mapped == null && pcId != null) {
       final rows = await txn.query(
         'suppliers',
         where: 'id IN (?,?)',
@@ -1005,10 +1208,19 @@ class LanSyncClient {
         limit: 2,
       );
       if (rows.length > 1) throw StateError('供应商同步匹配存在重复资料');
-      if (rows.isNotEmpty) existing = rows.first;
+      if (rows.isNotEmpty) {
+        final localId = rows.first['id'] as String;
+        final localMapping = await txn.query(
+          'sync_entity_ids',
+          columns: const ['remote_id'],
+          where: 'entity=? AND local_id=?',
+          whereArgs: ['supplier', localId],
+          limit: 1,
+        );
+        if (localMapping.isEmpty) existing = rows.first;
+      }
     }
 
-    final deleted = (m['is_deleted'] as num?)?.toInt() ?? 0;
     if (deleted != 0) {
       if (existing != null) {
         await rememberEntityId(txn, 'supplier', pcId, existing['id'] as String);
@@ -1023,7 +1235,7 @@ class LanSyncClient {
     }
     if (name.trim().isEmpty) return;
 
-    final id = (existing?['id'] as String?) ?? 'pc-$pcId';
+    final id = (existing?['id'] as String?) ?? mapped ?? 'pc-$pcId';
     await rememberEntityId(txn, 'supplier', pcId, id);
     await txn.insert('suppliers', {
       'id': id,
@@ -1111,9 +1323,11 @@ class LanSyncClient {
     final uri = Uri.parse(
       '${cfg.normalizedBase}/api/v1/product_images/$encodedId',
     );
-    final res = await _requestClient.get(uri, headers: _headers(cfg))
+    final res = await _requestClient
+        .get(uri, headers: _headers(cfg))
         .timeout(const Duration(seconds: 8));
-    if (res.statusCode != 200) throw StateError('图片下载失败：HTTP ${res.statusCode}');
+    if (res.statusCode != 200)
+      throw StateError('图片下载失败：HTTP ${res.statusCode}');
     final body = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
     if (body['ok'] != true) throw StateError('图片响应无效');
     final b64 = body['base64'] as String?;
@@ -1132,13 +1346,16 @@ class LanSyncClient {
         where: 'id=?',
         whereArgs: [localProductId],
       );
-    } else { throw StateError('图片保存失败'); }
+    } else {
+      throw StateError('图片保存失败');
+    }
   }
 
   Future<String> pushCategories(LanSyncConfig cfg) async {
     final cats = await repo.listCategories();
     final uri = Uri.parse('${cfg.normalizedBase}/api/v1/categories');
-    final res = await _requestClient.post(
+    final res = await _requestClient
+        .post(
           uri,
           headers: _headers(cfg),
           body: jsonEncode({
@@ -1157,7 +1374,8 @@ class LanSyncClient {
     final rows = await repo.listBarcodeQueue(status: 'pending');
     if (rows.isEmpty) return 'No pending barcode queue';
     final uri = Uri.parse('${cfg.normalizedBase}/api/v1/barcode_queue');
-    final res = await _requestClient.post(
+    final res = await _requestClient
+        .post(
           uri,
           headers: _headers(cfg),
           body: jsonEncode({
@@ -1266,7 +1484,8 @@ class LanSyncClient {
       }
 
       final uri = Uri.parse('${cfg.normalizedBase}/api/v1/sales');
-      final res = await _requestClient.post(uri, headers: _headers(cfg), body: jsonEncode({'sales': sales}))
+      final res = await _requestClient
+          .post(uri, headers: _headers(cfg), body: jsonEncode({'sales': sales}))
           .timeout(const Duration(seconds: 45));
       final body =
           jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
@@ -1308,10 +1527,7 @@ class LanSyncClient {
           }
           await txn.update(
             'sales',
-            <String, Object?>{
-              'receipt_no': canonicalReceipt,
-              'synced_at': now,
-            },
+            <String, Object?>{'receipt_no': canonicalReceipt, 'synced_at': now},
             where: 'id=?',
             whereArgs: [id],
           );
@@ -1335,7 +1551,8 @@ class LanSyncClient {
       final uri = Uri.parse(
         '${cfg.normalizedBase}/api/v1/sales${since.isEmpty ? '' : '?since=${Uri.encodeQueryComponent(since)}'}',
       );
-      final res = await _requestClient.get(uri, headers: _headers(cfg))
+      final res = await _requestClient
+          .get(uri, headers: _headers(cfg))
           .timeout(const Duration(seconds: 30));
       final body =
           jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
@@ -1403,11 +1620,15 @@ class LanSyncClient {
           final lines = <Map<String, Object?>>[];
           for (final raw in m['lines'] as List? ?? const []) {
             final line = Map<String, Object?>.from(raw as Map);
-            final remoteId = (line['productId'] ?? line['product_id'])?.toString() ?? '';
+            final remoteId =
+                (line['productId'] ?? line['product_id'])?.toString() ?? '';
             // Use the immutable mapping even for soft-deleted products. A
             // receipt round trip must not replace its historical local ID.
-            lines.add({...line, 'productId':
-                await mappedLocalId(txn, 'product', remoteId) ?? remoteId});
+            lines.add({
+              ...line,
+              'productId':
+                  await mappedLocalId(txn, 'product', remoteId) ?? remoteId,
+            });
           }
           final total = (m['total_cents'] as num?)?.toInt() ?? 0;
           final paid = (m['paid_cents'] as num?)?.toInt() ?? total;
@@ -1476,7 +1697,8 @@ class LanSyncClient {
     required String receiptNo,
   }) async {
     final uri = Uri.parse('${cfg.normalizedBase}/api/v1/notify');
-    await _requestClient.post(
+    await _requestClient
+        .post(
           uri,
           headers: _headers(cfg),
           body: jsonEncode({

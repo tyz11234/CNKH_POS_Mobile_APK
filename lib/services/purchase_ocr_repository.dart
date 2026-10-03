@@ -15,9 +15,9 @@ import 'sync_store.dart';
 
 class PurchaseOcrRepository {
   PurchaseOcrRepository(this.posRepo)
-      : _database = posRepo.database,
-        _matcher = const ProductMatchService(),
-        _validator = const PurchaseValidationService();
+    : _database = posRepo.database,
+      _matcher = const ProductMatchService(),
+      _validator = const PurchaseValidationService();
 
   final PosRepository posRepo;
   final AppDatabase _database;
@@ -62,20 +62,44 @@ class PurchaseOcrRepository {
       var confidence = line.matchConfidence;
       var source = '';
 
-      if ((line.matchedProductId ?? '').isNotEmpty) {
-        product = await posRepo.getProduct(line.matchedProductId!);
-        confidence = product == null ? 0 : (confidence <= 0 ? 1 : confidence);
-      }
-
-      if (product == null && (supplierId ?? '').isNotEmpty) {
+      var aliasUnitConflict = false;
+      // An explicitly reviewed line belongs to the cashier, even if its
+      // product or unit differs from the supplier's saved alias.
+      if (!line.userModified && (supplierId ?? '').isNotEmpty) {
         final alias = await lookupAlias(supplierId!, line.rawProductName);
         if (alias != null) {
-          product = await posRepo.getProduct(alias['product_id'] as String);
-          if (product != null) {
+          final aliasedProduct = await posRepo.getProduct(
+            alias['product_id'] as String,
+          );
+          if (aliasedProduct != null && aliasedProduct.isDeleted == 0) {
+            product = aliasedProduct;
             confidence = 1;
-            source = 'supplier_memory';
+            final savedUnit = (alias['unit'] as String? ?? '').trim();
+            final incomingUnit = line.unit.trim();
+            final factor = (alias['conversion_factor'] as num?)?.toDouble();
+            final compatible =
+                savedUnit.isNotEmpty &&
+                savedUnit.toLowerCase() == incomingUnit.toLowerCase() &&
+                factor != null &&
+                factor.isFinite &&
+                factor > 0;
+            if (compatible) {
+              line = line.copyWith(conversionFactor: factor);
+              source = 'supplier_memory';
+            } else {
+              // Do not apply a carton/case conversion to a different OCR unit.
+              // The error blocks commit until the line is reviewed manually.
+              line = line.copyWith(conversionFactor: 1);
+              aliasUnitConflict = true;
+              source = 'supplier_memory_unit_conflict';
+            }
           }
         }
+      }
+
+      if (product == null && (line.matchedProductId ?? '').isNotEmpty) {
+        product = await posRepo.getProduct(line.matchedProductId!);
+        confidence = product == null ? 0 : (confidence <= 0 ? 1 : confidence);
       }
 
       if (product == null) {
@@ -115,6 +139,16 @@ class PurchaseOcrRepository {
           ),
         );
       }
+      if (aliasUnitConflict) {
+        warnings.insert(
+          0,
+          const PurchaseWarning(
+            code: 'supplier_memory_unit_conflict',
+            message: '该供应商的商品单位与本次 OCR 单位不同，请核对换算后再入库。',
+            level: PurchaseWarningLevel.error,
+          ),
+        );
+      }
       preparedLines.add(line.copyWith(warnings: warnings));
     }
 
@@ -124,10 +158,12 @@ class PurchaseOcrRepository {
       lines: preparedLines,
     );
     final draftWarnings = <PurchaseWarning>[
-      ...draft.warnings.where((w) =>
-          w.code == 'no_product_lines' ||
-          w.code == 'invoice_total_missing' ||
-          w.code == 'supplier_missing'),
+      ...draft.warnings.where(
+        (w) =>
+            w.code == 'no_product_lines' ||
+            w.code == 'invoice_total_missing' ||
+            w.code == 'supplier_missing',
+      ),
       ..._validator.validateDraft(next),
     ];
     return next.copyWith(warnings: _dedupeWarnings(draftWarnings));
@@ -139,16 +175,26 @@ class PurchaseOcrRepository {
       final history = line.isMatched
           ? await historyForProduct(line.matchedProductId!)
           : const PurchaseHistorySample();
-      lines.add(line.copyWith(
-        warnings: _validator.validateLine(line, history: history),
-      ));
+      lines.add(
+        line.copyWith(
+          warnings: [
+            ...line.warnings.where(
+              (warning) =>
+                  warning.code == 'supplier_memory_unit_conflict' &&
+                  !line.userModified,
+            ),
+            ..._validator.validateLine(line, history: history),
+          ],
+        ),
+      );
     }
     final next = draft.copyWith(lines: lines);
     return next.copyWith(
       warnings: _dedupeWarnings([
-        ...draft.warnings.where((w) =>
-            w.code == 'invoice_total_missing' ||
-            w.code == 'no_product_lines'),
+        ...draft.warnings.where(
+          (w) =>
+              w.code == 'invoice_total_missing' || w.code == 'no_product_lines',
+        ),
         ..._validator.validateDraft(next),
       ]),
     );
@@ -156,7 +202,10 @@ class PurchaseOcrRepository {
 
   List<PurchaseWarning> _dedupeWarnings(List<PurchaseWarning> input) {
     final seen = <String>{};
-    return [for (final w in input) if (seen.add('${w.code}:${w.message}')) w];
+    return [
+      for (final w in input)
+        if (seen.add('${w.code}:${w.message}')) w,
+    ];
   }
 
   Future<List<ProductMatchCandidate>> candidatesFor(String rawName) async {
@@ -238,9 +287,11 @@ class PurchaseOcrRepository {
         for (final raw in lines) {
           final line = Map<String, dynamic>.from(raw as Map);
           if (line['productId']?.toString() != productId) continue;
-          final qty = (line['qty'] as num?)?.toDouble() ??
+          final qty =
+              (line['qty'] as num?)?.toDouble() ??
               (line['invoiceQty'] as num?)?.toDouble();
-          final cost = (line['unitCostCents'] as num?)?.toInt() ??
+          final cost =
+              (line['unitCostCents'] as num?)?.toInt() ??
               (line['invoiceUnitCostCents'] as num?)?.toInt();
           if (qty != null && qty > 0) quantities.add(qty);
           lastCost ??= cost;
@@ -265,31 +316,27 @@ class PurchaseOcrRepository {
   Future<void> saveDraft(PurchaseDraft draft) async {
     final db = await _db();
     await db.transaction((txn) async {
-      await txn.insert(
-        'purchase_drafts',
-        {
-          'id': draft.draftId,
-          'supplier_id': draft.supplierId,
-          'supplier_name': draft.supplierName,
-          'invoice_no': draft.invoiceNo,
-          'invoice_date': draft.invoiceDate,
-          'image_path': draft.imagePath,
-          'original_image_path': draft.originalImagePath,
-          'ocr_raw_text': draft.ocrRawText,
-          'discount_cents': draft.discountCents,
-          'tax_cents': draft.taxCents,
-          'delivery_fee_cents': draft.deliveryFeeCents,
-          'other_fee_cents': draft.otherFeeCents,
-          'invoice_total_cents': draft.invoiceTotalCents,
-          'warnings_json': jsonEncode(
-            draft.warnings.map((w) => w.toMap()).toList(),
-          ),
-          'created_at': draft.createdAt,
-          'created_by': draft.createdBy,
-          'status': draft.status,
-        },
-        conflictAlgorithm: ConflictAlgorithm.replace,
-      );
+      await txn.insert('purchase_drafts', {
+        'id': draft.draftId,
+        'supplier_id': draft.supplierId,
+        'supplier_name': draft.supplierName,
+        'invoice_no': draft.invoiceNo,
+        'invoice_date': draft.invoiceDate,
+        'image_path': draft.imagePath,
+        'original_image_path': draft.originalImagePath,
+        'ocr_raw_text': draft.ocrRawText,
+        'discount_cents': draft.discountCents,
+        'tax_cents': draft.taxCents,
+        'delivery_fee_cents': draft.deliveryFeeCents,
+        'other_fee_cents': draft.otherFeeCents,
+        'invoice_total_cents': draft.invoiceTotalCents,
+        'warnings_json': jsonEncode(
+          draft.warnings.map((w) => w.toMap()).toList(),
+        ),
+        'created_at': draft.createdAt,
+        'created_by': draft.createdBy,
+        'status': draft.status,
+      }, conflictAlgorithm: ConflictAlgorithm.replace);
       await txn.delete(
         'purchase_draft_lines',
         where: 'draft_id=?',
@@ -351,8 +398,10 @@ class PurchaseOcrRepository {
     List<PurchaseWarning> decodeWarnings(Object? raw) {
       try {
         return (jsonDecode(raw?.toString() ?? '[]') as List)
-            .map((e) => PurchaseWarning.fromMap(
-                Map<String, Object?>.from(e as Map)))
+            .map(
+              (e) =>
+                  PurchaseWarning.fromMap(Map<String, Object?>.from(e as Map)),
+            )
             .toList();
       } catch (_) {
         return const [];
@@ -361,28 +410,28 @@ class PurchaseOcrRepository {
 
     final lines = <PurchaseDraftLine>[];
     for (final l in lineRows) {
-      lines.add(PurchaseDraftLine(
-        id: l['id'] as String,
-        rawText: l['raw_text'] as String? ?? '',
-        rawProductName: l['raw_product_name'] as String? ?? '',
-        matchedProductId: l['matched_product_id'] as String?,
-        matchedProductName: l['matched_product_name'] as String? ?? '',
-        matchConfidence: (l['match_confidence'] as num?)?.toDouble() ?? 0,
-        quantity: (l['quantity'] as num?)?.toDouble() ?? 0,
-        unit: l['unit'] as String? ?? 'pcs',
-        unitCostCents: (l['unit_cost_cents'] as num?)?.toInt() ?? 0,
-        lineSubtotalCents:
-            (l['line_subtotal_cents'] as num?)?.toInt() ?? 0,
-        originalQuantity: (l['original_quantity'] as num?)?.toDouble(),
-        originalUnitCostCents:
-            (l['original_unit_cost_cents'] as num?)?.toInt(),
-        originalLineSubtotalCents:
-            (l['original_line_subtotal_cents'] as num?)?.toInt(),
-        conversionFactor:
-            (l['conversion_factor'] as num?)?.toDouble() ?? 1,
-        warnings: decodeWarnings(l['warnings_json']),
-        userModified: l['user_modified'] == 1,
-      ));
+      lines.add(
+        PurchaseDraftLine(
+          id: l['id'] as String,
+          rawText: l['raw_text'] as String? ?? '',
+          rawProductName: l['raw_product_name'] as String? ?? '',
+          matchedProductId: l['matched_product_id'] as String?,
+          matchedProductName: l['matched_product_name'] as String? ?? '',
+          matchConfidence: (l['match_confidence'] as num?)?.toDouble() ?? 0,
+          quantity: (l['quantity'] as num?)?.toDouble() ?? 0,
+          unit: l['unit'] as String? ?? 'pcs',
+          unitCostCents: (l['unit_cost_cents'] as num?)?.toInt() ?? 0,
+          lineSubtotalCents: (l['line_subtotal_cents'] as num?)?.toInt() ?? 0,
+          originalQuantity: (l['original_quantity'] as num?)?.toDouble(),
+          originalUnitCostCents: (l['original_unit_cost_cents'] as num?)
+              ?.toInt(),
+          originalLineSubtotalCents: (l['original_line_subtotal_cents'] as num?)
+              ?.toInt(),
+          conversionFactor: (l['conversion_factor'] as num?)?.toDouble() ?? 1,
+          warnings: decodeWarnings(l['warnings_json']),
+          userModified: l['user_modified'] == 1,
+        ),
+      );
     }
     return PurchaseDraft(
       draftId: draftId,
@@ -396,8 +445,7 @@ class PurchaseOcrRepository {
       lines: lines,
       discountCents: (row['discount_cents'] as num?)?.toInt() ?? 0,
       taxCents: (row['tax_cents'] as num?)?.toInt() ?? 0,
-      deliveryFeeCents:
-          (row['delivery_fee_cents'] as num?)?.toInt() ?? 0,
+      deliveryFeeCents: (row['delivery_fee_cents'] as num?)?.toInt() ?? 0,
       otherFeeCents: (row['other_fee_cents'] as num?)?.toInt() ?? 0,
       invoiceTotalCents: (row['invoice_total_cents'] as num?)?.toInt(),
       warnings: decodeWarnings(row['warnings_json']),
@@ -563,8 +611,7 @@ class PurchaseOcrRepository {
         if (rows.isEmpty) {
           throw StateError('进货商品已不存在：${line.matchedProductName}');
         }
-        final beforeCost =
-            (rows.first['cost_cents'] as num?)?.toInt() ?? 0;
+        final beforeCost = (rows.first['cost_cents'] as num?)?.toInt() ?? 0;
         final stockQty = line.stockQuantity;
         final baseCost = line.baseUnitCostCents;
         if (!stockQty.isFinite || stockQty <= 0) {
@@ -607,10 +654,11 @@ class PurchaseOcrRepository {
         'id': purchaseId,
         'purchase_no': purchaseNo,
         'purchased_at': now,
-        'supplier_id':
-            await remoteEntityId(txn, 'supplier', draft.supplierId!),
+        'supplier_id': await remoteEntityId(txn, 'supplier', draft.supplierId!),
         'supplier_name': draft.supplierName,
-        'supplier_phone': supplierRows.isEmpty ? '' : supplierRows.single['phone'],
+        'supplier_phone': supplierRows.isEmpty
+            ? ''
+            : supplierRows.single['phone'],
         'invoice_no': draft.invoiceNo,
         'invoice_date': draft.invoiceDate,
         'lines': remoteLines,
@@ -730,7 +778,8 @@ class PurchaseOcrRepository {
         'field_name': '',
         'original_value': '',
         'final_value': '$totalCents',
-        'details': 'invoice=${draft.invoiceNo}; warnings=${draft.warnings.length}',
+        'details':
+            'invoice=${draft.invoiceNo}; warnings=${draft.warnings.length}',
       });
       if (allowDuplicateInvoice) {
         await txn.insert('purchase_audit_log', {
@@ -850,35 +899,62 @@ class PurchaseOcrRepository {
         where: 'purchase_id=?',
         whereArgs: [purchaseId],
         limit: 1,
-      )).isNotEmpty) return;
-      if ((await txn.query('sync_outbox', columns: ['id'],
-        where: "kind='purchase_reverse' AND entity_id=?", whereArgs: [purchaseId], limit: 1)).isNotEmpty) {
+      )).isNotEmpty)
+        return;
+      if ((await txn.query(
+        'sync_outbox',
+        columns: ['id'],
+        where: "kind='purchase_reverse' AND entity_id=?",
+        whereArgs: [purchaseId],
+        limit: 1,
+      )).isNotEmpty) {
         throw StateError('撤销请求已保留在同步队列，请同步并核对 Desktop 返回结果');
       }
 
       final purchaseNo = purchase['purchase_no']?.toString() ?? '';
       final now = DateTime.now().toIso8601String();
       final planned = await planPurchaseReverse(txn, purchase);
-      final paired = (await readSetting(txn, 'lan_sync_host')).trim().isNotEmpty;
+      final paired = (await readSetting(
+        txn,
+        'lan_sync_host',
+      )).trim().isNotEmpty;
       final localPlan = <Map<String, Object?>>[];
       for (final change in planned) {
-        final product = (await txn.query('products', columns: ['cost_cents'],
-          where: 'id=?', whereArgs: [change.productId], limit: 1)).single;
+        final product = (await txn.query(
+          'products',
+          columns: ['cost_cents'],
+          where: 'id=?',
+          whereArgs: [change.productId],
+          limit: 1,
+        )).single;
         final cost = (product['cost_cents'] as num).toInt();
-        localPlan.add({'product_id': change.productId, 'quantity': change.quantity,
-          'before_cost': cost, 'after_cost': change.restoreCost ?? cost});
+        localPlan.add({
+          'product_id': change.productId,
+          'quantity': change.quantity,
+          'before_cost': cost,
+          'after_cost': change.restoreCost ?? cost,
+        });
       }
       final payload = <String, Object?>{
-        'purchase_id': purchaseId, 'purchase_no': purchase['purchase_no'],
-        'reason': reason, 'notes': notes, 'operator': operator,
-        'local_applied': !paired, 'local_reverse_plan': localPlan,
+        'purchase_id': purchaseId,
+        'purchase_no': purchase['purchase_no'],
+        'reason': reason,
+        'notes': notes,
+        'operator': operator,
+        'local_applied': !paired,
+        'local_reverse_plan': localPlan,
       };
       if (paired) {
         await queueMutation(txn, 'purchase_reverse', purchaseId, payload);
         await txn.insert('purchase_audit_log', {
-          'id': AppDatabase.newId(), 'purchase_id': purchaseId, 'occurred_at': now,
-          'username': operator, 'action': 'purchase_reverse_requested',
-          'field_name': 'status', 'original_value': 'committed', 'final_value': 'awaiting_desktop',
+          'id': AppDatabase.newId(),
+          'purchase_id': purchaseId,
+          'occurred_at': now,
+          'username': operator,
+          'action': 'purchase_reverse_requested',
+          'field_name': 'status',
+          'original_value': 'committed',
+          'final_value': 'awaiting_desktop',
           'details': '$reason${notes.isEmpty ? '' : ': $notes'}',
         });
         return;
@@ -887,9 +963,7 @@ class PurchaseOcrRepository {
       for (final change in planned) {
         final productId = change.productId;
         final qty = change.quantity;
-        final update = <String, Object?>{
-          'stock': change.currentStock - qty,
-        };
+        final update = <String, Object?>{'stock': change.currentStock - qty};
         if (change.restoreCost != null) {
           update['cost_cents'] = change.restoreCost;
         }
