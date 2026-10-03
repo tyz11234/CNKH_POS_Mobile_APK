@@ -1,17 +1,20 @@
-# CNKH POS Mobile 1.10.9+37 candidate — not published
+# CNKH POS Mobile 1.10.9+37 — Android APK not released
 
-## Fixes
+## Source fixes
 
-- **B001 (Both):** About reads the installed package version and build number.
-- **B002 (Mobile):** Product image filesystem failures stay inside the sync recovery path.
-- **B003 (Both CI):** Paired repository refs point to current companion main commits.
+- **B001 (Both):** About reads the installed package Version and Build Number, removing duplicate hard-coded values.
+- **B002 (Mobile):** Await product image file writes so asynchronous filesystem failures reach the existing sync recovery path.
+- **B003 (Both CI):** Pin paired regression workflows to the companion repository commits included in this release cycle.
 
-## Release gate
+## Audit and regression
 
-The source candidate passed five audit rounds; the last two were clean. Final Release Regression passed: Mobile 147/147 tests, Desktop 151/151, integration 29/29, analyze with 0 errors, training capture/view checks, and version consistency. APK build is blocked by the missing Android SDK and matching Debug signing key; Windows build requires a Windows host. The current GitHub token is invalid, so no commit, push, tag, package, or Release was created. Existing downloads remain Mobile 1.10.7+35 and Desktop 1.10.8+36.
+Six complete audit rounds were performed; Rounds 5 and 6 were clean. Final local regression passed: Mobile **147/147**, Desktop **151/151**, and paired HTTP integration **29/29**. Both analyzers reported zero errors. Round 6 made the supplier selection regression test wait for the async repository and dropdown state observed on the Windows runner.
+
+The current Mobile main source is 1.10.9+37. No APK or Mobile Release tag was created. The latest downloadable APK remains 1.10.7+35; its Android Debug signing certificate has SHA-256 `51d08c3a894a972f03cfd99dac38a468ffba9de58f0062f6a3bba5b07da57406`. The matching private key is unavailable, so a new APK cannot be confirmed as an in-place update. Do not uninstall before syncing and backing up local business data.
+
+Database schema remains v10 and LAN protocol remains `cnkh-sync:v1`. Physical Android device, printer, store-network, and live MyInvois acceptance were not performed.
 
 ---
-
 # CNKH POS Mobile 1.10.8+36
 
 ## 修复内容
