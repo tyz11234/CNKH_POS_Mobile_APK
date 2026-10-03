@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../models/app_user.dart';
+import '../app_version.dart';
 import '../services/pos_repository.dart';
 import '../app_release_notes.dart';
 import '../services/qr_storage.dart';
@@ -49,6 +50,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String _cacheCustom = '';
   String _cacheDefault = '';
   bool _resetBusy = false;
+  late final Future<String> _appVersionLabel;
   List<Map<String, Object?>> _saleVoidReview = [];
 
   bool get canEdit => widget.user.canEditQr;
@@ -56,6 +58,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   void initState() {
     super.initState();
+    _appVersionLabel = loadAppVersionLabel();
     _reload();
   }
 
@@ -892,25 +895,42 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ],
         const SizedBox(height: 12),
         Card(
-          child: ListTile(
-            leading: const Icon(Icons.info_outline, color: CnkhColors.primary),
-            title: const Text('关于 / About'),
-            subtitle: const Text('CNKH POS Mobile $appVersionLabel · 黄金发宝号'),
-            onTap: () => showAboutDialog(
-              context: context,
-              applicationName: 'CNKH POS Mobile',
-              applicationVersion: appVersionLabel,
-              applicationLegalese: '黄金发宝号 companion',
-              children: [
-                const Text('本次更新 / This update'),
-                const SizedBox(height: 8),
-                for (final note in appReleaseNotes)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 8),
-                    child: Text('• $note'),
-                  ),
-              ],
-            ),
+          child: FutureBuilder<String>(
+            future: _appVersionLabel,
+            builder: (context, snapshot) {
+              final versionLabel = snapshot.data;
+              return ListTile(
+                leading: const Icon(
+                  Icons.info_outline,
+                  color: CnkhColors.primary,
+                ),
+                title: const Text('关于 / About'),
+                subtitle: Text(
+                  snapshot.hasError
+                      ? 'CNKH POS Mobile · 无法读取版本'
+                      : versionLabel == null
+                      ? 'CNKH POS Mobile · 正在读取版本…'
+                      : 'CNKH POS Mobile $versionLabel · 黄金发宝号',
+                ),
+                onTap: versionLabel == null
+                    ? null
+                    : () => showAboutDialog(
+                        context: context,
+                        applicationName: 'CNKH POS Mobile',
+                        applicationVersion: versionLabel,
+                        applicationLegalese: '黄金发宝号 companion',
+                        children: [
+                          const Text('本次更新 / This update'),
+                          const SizedBox(height: 8),
+                          for (final note in appReleaseNotes)
+                            Padding(
+                              padding: const EdgeInsets.only(bottom: 8),
+                              child: Text('• $note'),
+                            ),
+                        ],
+                      ),
+              );
+            },
           ),
         ),
       ],

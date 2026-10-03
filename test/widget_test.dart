@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:cnkh_pos_mobile/main.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+import 'package_info_test_support.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -18,6 +19,7 @@ void main() {
   late AppDatabase database;
   late PosRepository repo;
   setUp(() async {
+    await mockPackageInfoForTests();
     SharedPreferences.setMockInitialValues({});
     final view = TestWidgetsFlutterBinding.instance.platformDispatcher.implicitView!;
     view.physicalSize = const Size(430, 932);
