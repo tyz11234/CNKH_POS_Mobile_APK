@@ -18,6 +18,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: mobile-ci-${{ (startsWith(github.ref, 'refs/tags/') || (github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[release]'))) && 'release' || github.run_id }}
+  cancel-in-progress: false
+
 jobs:
   build-android:
     runs-on: ubuntu-latest
@@ -25,6 +29,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Test immutable Release gate
+        run: python3 tool/test_release_gate.py
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
@@ -44,16 +51,26 @@ jobs:
       - name: Test
         run: flutter test
 
+      - name: Select paired Desktop training source
+        id: training_source
+        shell: bash
+        run: |
+          set -euo pipefail
+          paired_ref=$(tr -d '\r\n' < .github/paired-desktop-ref)
+          [[ "$paired_ref" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]]
+          echo "ref=$paired_ref" >> "$GITHUB_OUTPUT"
+
       - name: Checkout Desktop training source
         uses: actions/checkout@v4
         with:
           repository: tyz11234/CNKH_POS_Desktop
-          ref: 02e3574b16d45bf0e13f89f5f1d1b42f50bfa3f3 # Desktop v0.4.0 release source
+          ref: ${{ steps.training_source.outputs.ref }}
           path: .training_desktop
 
       - name: Capture actual Desktop training screens
         working-directory: .training_desktop
         run: |
+          echo "Desktop training SHA: $(git rev-parse HEAD)"
           flutter pub get
           flutter test tool/training_capture_test.dart
 
@@ -206,15 +223,22 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+      - name: Check immutable Release identity
+        if: startsWith(github.ref, 'refs/tags/') || (github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[release]'))
+        run: python3 tool/check_release_gate.py --kind mobile
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/') || (github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[release]'))
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || env.RELEASE_TAG }}
+          tag_name: ${{ env.RELEASE_TAG }}
           target_commitish: ${{ github.sha }}
           name: CNKH POS Mobile ${{ env.APP_VERSION }}
           body_path: RELEASE_NOTES.md
           files: dist/*
           generate_release_notes: true
+          overwrite_files: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

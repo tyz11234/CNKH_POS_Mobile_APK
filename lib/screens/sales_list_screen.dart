@@ -138,9 +138,22 @@ class _SalesListScreenState extends State<SalesListScreen> {
         ],
       ),
     );
-    if (ok != true) return;
-    await widget.repo.voidSale(s.id, ctrl.text.trim().isEmpty ? 'void' : ctrl.text.trim());
-    await _load();
+    final note = ctrl.text.trim();
+    ctrl.dispose();
+    if (ok != true || !mounted) return;
+    try {
+      await widget.repo.voidSale(s.id, note.isEmpty ? 'void' : note);
+      if (mounted) await _load();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('作废失败 / Void failed: $e'),
+            backgroundColor: CnkhColors.danger,
+          ),
+        );
+      }
+    }
   }
 
   @override
