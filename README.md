@@ -4,27 +4,24 @@
 
 基于 **Flutter / Dart**，使用本地 SQLite 保存业务数据。核心收银与店内同步不依赖云服务器。
 
-> README 最后更新：**2026-10-03**。`main` 是完整源码与发布分支；`source/main` 仅保留为兼容分支。
+> README 最后更新：**2026-10-03**。源码与发布分支：main；source/main 仅作兼容分支。
 
-## 2026-10-03 · 1.10.7+35：F01–F11 修复发布
+## 2026-10-03 · 1.10.8+36：结账、目录同步与数据恢复修复
 
-本轮从两端 **1.10.6+34** 基线复核 F01–F11，保持现有 POS/LAN 架构、页面布局、离线销售和 `cnkh-sync:v1`。修复包括首次配对商品身份 ACK、软删除重建、税务提交/作废协调、初始库存基线、收据缓存归属、OCR 草稿行 ID、原子进货、具备凭据的最后管理员保护、中文栅格小票、重置后税务号码和事务日结。
+本版修复客户电话误带入下一笔销售、OCR 单位换算记忆、客户/供应商重建映射、未确认 Outbox 清理保护、挂单重复提交、分页排序、税务作废待复核、保留购物车刷新，以及中文长小票分页。LAN 协议仍为 cnkh-sync:v1，数据库仍为 schema v10。
 
-本版 main 发布 CI 实际通过：Mobile 完整测试 **130 项**、Desktop **132 项**；使用配套新版源码的真实 HTTP **29 项**通过。Android Release APK 与 Windows x64 Release 构建、培训资源检查均成功。两端 analyze 使用 `--no-fatal-infos --no-fatal-warnings`，Mobile **0 errors / 5 warnings / 37 infos**，Desktop **0 errors / 6 warnings / 38 infos**。[Mobile 发布 CI](https://github.com/tyz11234/CNKH_POS_Mobile_APK/actions/runs/37029961364)、[Windows 发布 CI](https://github.com/tyz11234/CNKH_POS_Desktop/actions/runs/37029953298)、[双端 HTTP](https://github.com/tyz11234/CNKH_POS_Mobile_APK/actions/runs/37029961222)。实体打印、门店旧库/网络、相机 OCR 和真实 MyInvois 尚未验收。
+Mobile 完整测试 **145 项通过**，Desktop **149 项通过**。本次 Android Release APK 还不能安全替换现有安装包：已发布的 1.10.7 APK 使用 Android Debug 证书，仓库没有该证书的私钥；用新证书签名会被 Android 拒绝覆盖安装，卸载还会清除本地业务数据。当前 APK 下载链接因此仍指向 1.10.7+35。Windows 新包由配套 Desktop 发布工作流在 Windows runner 构建。
 
-两端修复已合并 main，并发布 1.10.7+35。逐项根因、实际入口回归、兼容性和未验收范围见 [ELEVEN_BUG_VERIFICATION.md](ELEVEN_BUG_VERIFICATION.md)；以下历史版本的 CI 不替代本次回归。
+详见 [1.10.8+36 变更记录](CHANGELOG.md) 与 [Release Notes](RELEASE_NOTES.md)。
 
-## 当前源码与发布版本
+## 当前源码与发布包
 
-| 项目 | 版本 |
-| --- | --- |
-| Mobile `main` 与 Android Release | **1.10.7+35**（`v1.10.7-mobile`） |
-| 配套 Desktop `main` 与 Windows Release | **1.10.7+35**（`v1.10.7`） |
-| LAN 协议 | `cnkh-sync:v1` |
-| 本地数据库 | **schema v10**，自动增量升级旧数据库 |
-| OCR | 本机 Latin + Chinese ML Kit，不使用云 OCR |
-
-Mobile 与 Desktop **1.10.7+35** 已通过 main 发布 CI，APK、Windows ZIP 和校验文件均可下载。
+| 项目 | 当前源码 | 最新可下载包 |
+| --- | --- | --- |
+| Mobile main | **1.10.8+36** | Android APK **1.10.7+35**（签名兼容性限制） |
+| 配套 Desktop main | **1.10.8+36** | Windows ZIP **1.10.7+35**（1.10.8+36 发布构建进行中） |
+| LAN 协议 | cnkh-sync:v1 | schema v10，增量升级旧数据库 |
+| OCR | 本机 Latin + Chinese ML Kit | 不使用云 OCR |
 
 ## 下载与更新
 
