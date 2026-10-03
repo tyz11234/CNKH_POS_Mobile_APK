@@ -1,3 +1,17 @@
+# CNKH POS Mobile 1.10.9+37 candidate — not published
+
+## Fixes
+
+- **B001 (Both):** About reads the installed package version and build number.
+- **B002 (Mobile):** Product image filesystem failures stay inside the sync recovery path.
+- **B003 (Both CI):** Paired repository refs point to current companion main commits.
+
+## Release gate
+
+The source candidate passed five audit rounds; the last two were clean. Final Release Regression passed: Mobile 147/147 tests, Desktop 151/151, integration 29/29, analyze with 0 errors, training capture/view checks, and version consistency. APK build is blocked by the missing Android SDK and matching Debug signing key; Windows build requires a Windows host. The current GitHub token is invalid, so no commit, push, tag, package, or Release was created. Existing downloads remain Mobile 1.10.7+35 and Desktop 1.10.8+36.
+
+---
+
 # CNKH POS Mobile 1.10.8+36
 
 ## 修复内容
@@ -23,4 +37,3 @@ MyInvois R02 签名变更不在本版范围；官方要求与独立 verifier 尚
 ## 当前下载
 
 Windows ZIP： [CNKH_POS_Desktop-windows-x64-v1.10.8-36.zip](https://github.com/tyz11234/CNKH_POS_Desktop/releases/download/v1.10.8/CNKH_POS_Desktop-windows-x64-v1.10.8-36.zip)，SHA-256：f114693cb0633b6ab46a0d5e7ae32885be4bcc0780971c3ce8fe603fc3fc73c6。Windows ZIP 是便携包，不含安装向导。
-
