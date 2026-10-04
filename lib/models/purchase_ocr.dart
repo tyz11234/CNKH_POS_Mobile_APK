@@ -65,6 +65,16 @@ class PurchaseDraftLine {
   });
 
   double get stockQuantity => quantity * conversionFactor;
+  bool get hasValidCalculatedSubtotal {
+    final cents = quantity * unitCostCents;
+    return quantity.isFinite && quantity > 0 && unitCostCents >= 0 &&
+        cents.isFinite && cents.abs() <= 9007199254740991;
+  }
+  bool get hasValidBaseUnitCost {
+    final cents = unitCostCents / conversionFactor;
+    return conversionFactor.isFinite && conversionFactor > 0 &&
+        unitCostCents >= 0 && cents.isFinite && cents.abs() <= 9007199254740991;
+  }
   int get calculatedSubtotalCents => (quantity * unitCostCents).round();
   int get baseUnitCostCents => conversionFactor <= 0
       ? unitCostCents

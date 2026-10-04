@@ -1,3 +1,4 @@
+import 'stock_numeric_validation.dart';
 import 'dart:convert';
 
 import 'package:sqflite/sqflite.dart';
@@ -36,6 +37,7 @@ Future<void> acknowledgePurchaseReverse(
   if (purchase['reversed'] == 1) return;
   final now = DateTime.now().toIso8601String();
   for (final entry in _quantities(purchase).entries) {
+    await validateStockAddition(txn, entry.key, -entry.value);
     if (await txn.rawUpdate('UPDATE products SET stock=stock-? WHERE id=?', [entry.value, entry.key]) != 1) {
       throw StateError('已确认的撤销缺少本地商品，请核对');
     }
@@ -96,6 +98,7 @@ Future<bool> rejectPurchaseReverse(
       if ((await txn.query('products', columns: ['id'], where: 'id=?', whereArgs: [entry.key], limit: 1)).isEmpty) return false;
     }
     for (final entry in quantities.entries) {
+      await validateStockAddition(txn, entry.key, entry.value);
       await txn.rawUpdate('UPDATE products SET stock=stock+? WHERE id=?', [entry.value, entry.key]);
       final plans = payload['local_reverse_plan'];
       if (plans is List) {

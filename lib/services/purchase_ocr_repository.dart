@@ -1,3 +1,4 @@
+import 'stock_numeric_validation.dart';
 import 'dart:convert';
 import 'dart:io';
 
@@ -702,6 +703,7 @@ class PurchaseOcrRepository {
         final productId = line.matchedProductId!;
         final stockQty = line.stockQuantity;
         final baseCost = line.baseUnitCostCents;
+        await validateStockAddition(txn, productId, stockQty);
         await txn.rawUpdate(
           'UPDATE products SET stock=stock+?, cost_cents=? WHERE id=?',
           [stockQty, baseCost, productId],

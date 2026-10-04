@@ -275,12 +275,22 @@ class _CartScreenState extends State<CartScreen> {
       ),
     );
     if (ok != true || !mounted) return;
-    final v = double.tryParse(ctrl.text.trim()) ?? 0;
+    final v = double.tryParse(ctrl.text.trim());
+    final cents = tryParseRmCents(ctrl.text);
+    if (v == null || !v.isFinite || (mode == 'rm' && cents == null)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('请输入有效折扣 / Enter a valid discount')),
+      );
+      return;
+    }
     final oldDisc = item.discountCents;
     if (mode == 'rm') {
-      item.discountCents = clampDiscountCents(rmToCents(v), item.grossCents);
+      item.discountCents = clampDiscountCents(cents!, item.grossCents);
     } else {
-      item.discountCents = percentDiscountCents(item.grossCents, v);
+      item.discountCents = percentDiscountCents(
+        item.grossCents,
+        v.clamp(0, 100),
+      );
     }
     await widget.repo.logAudit(
       username: widget.user.username,
@@ -323,10 +333,15 @@ class _CartScreenState extends State<CartScreen> {
       ),
     );
     if (ok != true || !mounted) return;
+    final cents = tryParseRmCents(ctrl.text);
+    if (cents == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('请输入有效折扣 / Enter a valid discount')),
+      );
+      return;
+    }
     final oldOrder = widget.cart.orderDiscountCents;
-    widget.cart.orderDiscountCents = rmToCents(
-      double.tryParse(ctrl.text.trim()) ?? 0,
-    );
+    widget.cart.orderDiscountCents = cents;
     await widget.repo.logAudit(
       username: widget.user.username,
       role: widget.user.isAdmin ? 'ADMIN' : 'STAFF',
@@ -344,8 +359,9 @@ class _CartScreenState extends State<CartScreen> {
         builder: (_) => BarcodeScanScreen(
           repo: widget.repo,
           onProduct: (p) async {
-            await _add(p);
+            final accepted = await _add(p);
             if (mounted) setState(() {});
+            return accepted;
           },
           onPairing: widget.onPairing,
         ),

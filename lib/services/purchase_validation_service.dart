@@ -62,7 +62,23 @@ class PurchaseValidationService {
       ));
     }
 
-    final mathDelta = (line.calculatedSubtotalCents - line.lineSubtotalCents).abs();
+    if (!line.hasValidCalculatedSubtotal) {
+      out.add(const PurchaseWarning(
+        code: 'invalid_calculated_subtotal',
+        message: '数量与成本的合计超出有效金额范围。',
+        level: PurchaseWarningLevel.error,
+      ));
+    }
+    if (!line.hasValidBaseUnitCost) {
+      out.add(const PurchaseWarning(
+        code: 'invalid_base_unit_cost',
+        message: '换算后的单位成本超出有效金额范围。',
+        level: PurchaseWarningLevel.error,
+      ));
+    }
+    final mathDelta = line.hasValidCalculatedSubtotal
+        ? (line.calculatedSubtotalCents - line.lineSubtotalCents).abs()
+        : 0;
     if (mathDelta > lineToleranceCents) {
       out.add(PurchaseWarning(
         code: 'line_math_mismatch',
@@ -87,8 +103,7 @@ class PurchaseValidationService {
     final previousCost = history.lastUnitCostCents;
     if (previousCost != null &&
         previousCost > 0 &&
-        line.conversionFactor.isFinite &&
-        line.conversionFactor > 0) {
+        line.hasValidBaseUnitCost) {
       final currentBaseCost = line.baseUnitCostCents;
       final ratio = (currentBaseCost - previousCost).abs() / previousCost;
       if (ratio >= costChangeWarningRatio) {

@@ -17,7 +17,7 @@ import '../theme/cnkh_theme.dart';
 /// Pairing QR (`cnkh-sync:…`) is distinguished from product barcodes.
 class BarcodeScanScreen extends StatefulWidget {
   final PosRepository repo;
-  final void Function(Product product)? onProduct;
+  final Future<bool> Function(Product product)? onProduct;
   final void Function(LanSyncConfig config)? onPairing;
   final bool pairingOnly;
 
@@ -89,6 +89,7 @@ class _BarcodeScanScreenState extends State<BarcodeScanScreen> {
   }
 
   Future<void> _openManualSearch() async {
+    if (_handling) return;
     final picked = await showModalBottomSheet<Product>(
       context: context,
       isScrollControlled: true,
@@ -96,12 +97,24 @@ class _BarcodeScanScreenState extends State<BarcodeScanScreen> {
     );
     if (picked == null || !mounted) return;
     if (widget.onProduct != null) {
-      widget.onProduct!(picked);
-      setState(() {
-        _addedCount++;
-        _lastProductName = picked.nameZh;
-      });
-      await playScanFeedback(widget.repo);
+      _handling = true;
+      try {
+        final accepted = await widget.onProduct!(picked);
+        if (!accepted || !mounted) return;
+        setState(() {
+          _addedCount++;
+          _lastProductName = picked.nameZh;
+        });
+        await playScanFeedback(widget.repo);
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('加购失败 / Add failed: $e'), backgroundColor: CnkhColors.danger),
+          );
+        }
+      } finally {
+        _handling = false;
+      }
     }
   }
 
@@ -180,7 +193,8 @@ class _BarcodeScanScreenState extends State<BarcodeScanScreen> {
         );
       } else {
         // Continuous: add qty+1, keep camera open (do NOT pop).
-        widget.onProduct!(product);
+        final accepted = await widget.onProduct!(product);
+        if (!accepted || !mounted) return;
         await playScanFeedback(widget.repo);
         if (!mounted) return;
         setState(() {
@@ -195,6 +209,10 @@ class _BarcodeScanScreenState extends State<BarcodeScanScreen> {
           ),
         );
       }
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('扫码失败 / Scan failed: $e'), backgroundColor: CnkhColors.danger),
+      );
     } finally {
       _handling = false;
     }

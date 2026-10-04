@@ -1,3 +1,4 @@
+import 'stock_numeric_validation.dart';
 import 'catalog_stock_baseline.dart';
 import 'einvoice/einvoice_status_store.dart';
 import 'dart:async';
@@ -1052,7 +1053,7 @@ class LanSyncClient {
       await txn.insert('stock_moves', {
         'id': AppDatabase.newId(),
         'product_id': id,
-        'change': product.stock - previousStock,
+        'change': checkedStockDifference(product.stock, previousStock),
         'reason': baseline
             ? 'desktop_catalog_baseline'
             : 'desktop_catalog_sync',

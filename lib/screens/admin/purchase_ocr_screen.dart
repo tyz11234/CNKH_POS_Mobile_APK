@@ -274,16 +274,28 @@ class _PurchaseOcrScreenState extends State<PurchaseOcrScreen> {
                 final lineSubtotal = _parser.parseMoneyCents(
                   subtotal.text.trim(),
                 );
-                final nextQtyError = q == null || !q.isFinite || q <= 0
+                var nextQtyError = q == null || !q.isFinite || q <= 0
                     ? '数量必须是大于 0 的有效数字'
                     : null;
-                final nextConversionError = c == null || !c.isFinite || c <= 0
+                var nextConversionError = c == null || !c.isFinite || c <= 0
                     ? '换算倍率必须是大于 0 的有效数字'
                     : null;
                 final nextCostError = unitCost == null ? '金额格式错误' : null;
                 final nextSubtotalError = lineSubtotal == null
                     ? '金额格式错误'
                     : null;
+                if (q != null && unitCost != null) {
+                  final calculated = q * unitCost;
+                  if (!calculated.isFinite || calculated.abs() > 9007199254740991) {
+                    nextQtyError = '数量与成本的合计超出有效金额范围';
+                  }
+                }
+                if (c != null && unitCost != null) {
+                  final baseCost = unitCost / c;
+                  if (!baseCost.isFinite || baseCost.abs() > 9007199254740991) {
+                    nextConversionError = '换算后的单位成本超出有效金额范围';
+                  }
+                }
                 if (nextQtyError != null ||
                     nextConversionError != null ||
                     nextCostError != null ||
@@ -983,7 +995,7 @@ class _PurchaseOcrScreenState extends State<PurchaseOcrScreen> {
                       ),
                       if (product != null)
                         Text(
-                          '库存 ${product.stock} → ${stockAfter?.toStringAsFixed(2)} ${product.unit} · 成本 ${formatRm(product.costCents)} → ${formatRm(line.baseUnitCostCents)}',
+                          '库存 ${product.stock} → ${stockAfter?.toStringAsFixed(2)} ${product.unit} · 成本 ${formatRm(product.costCents)} → ${line.hasValidBaseUnitCost ? formatRm(line.baseUnitCostCents) : '无效 / Invalid'}',
                           style: const TextStyle(
                             fontSize: 12,
                             color: CnkhColors.muted,

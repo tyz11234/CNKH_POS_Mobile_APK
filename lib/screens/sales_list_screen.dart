@@ -124,7 +124,7 @@ class _SalesListScreenState extends State<SalesListScreen> {
 
   Future<void> _void(SaleRecord s) async {
     final ctrl = TextEditingController();
-    final ok = await showDialog<bool>(
+    final dialog = DialogRoute<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('作废备注 / Void note'),
@@ -138,9 +138,24 @@ class _SalesListScreenState extends State<SalesListScreen> {
         ],
       ),
     );
-    if (ok != true) return;
-    await widget.repo.voidSale(s.id, ctrl.text.trim().isEmpty ? 'void' : ctrl.text.trim());
-    await _load();
+    final ok = await Navigator.of(context, rootNavigator: true).push(dialog);
+    await dialog.completed;
+    final note = ctrl.text.trim();
+    ctrl.dispose();
+    if (ok != true || !mounted) return;
+    try {
+      await widget.repo.voidSale(s.id, note.isEmpty ? 'void' : note);
+      if (mounted) await _load();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('作废失败 / Void failed: $e'),
+            backgroundColor: CnkhColors.danger,
+          ),
+        );
+      }
+    }
   }
 
   @override
