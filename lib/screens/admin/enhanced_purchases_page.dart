@@ -251,7 +251,7 @@ class _EnhancedPurchasesPageState extends State<EnhancedPurchasesPage> {
     double? validQty;
     int? validUnitCost;
 
-    final ok = await showDialog<bool>(
+    final dialog = DialogRoute<bool>(
       context: context,
       barrierDismissible: false,
       builder: (ctx) => StatefulBuilder(
@@ -426,6 +426,13 @@ class _EnhancedPurchasesPageState extends State<EnhancedPurchasesPage> {
                   costError = '请输入有效金额，例如 12.50 或 1,234.56';
                   invalid = true;
                 }
+                if (q != null && q.isFinite && unitCost != null) {
+                  final subtotal = q * unitCost;
+                  if (!subtotal.isFinite || subtotal.abs() > 9007199254740991) {
+                    qtyError = '数量与成本的合计超出有效金额范围';
+                    invalid = true;
+                  }
+                }
                 if (invalid) {
                   setLocal(() {});
                   return;
@@ -440,6 +447,10 @@ class _EnhancedPurchasesPageState extends State<EnhancedPurchasesPage> {
         ),
       ),
     );
+
+    final ok = await Navigator.of(context, rootNavigator: true).push(dialog);
+    // The popped dialog still uses its focused controllers during transition.
+    await dialog.completed;
 
     if (ok != true) {
       qty.dispose();

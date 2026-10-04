@@ -50,6 +50,35 @@ class _Repository extends PosRepository {
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  Future<void> waitForState(WidgetTester tester, bool Function() ready) async {
+    final deadline = DateTime.now().add(const Duration(seconds: 10));
+    while (DateTime.now().isBefore(deadline)) {
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 20)),
+      );
+      await tester.pump(const Duration(milliseconds: 20));
+      if (ready()) return;
+    }
+    fail('Image operation did not reach its observable UI state');
+  }
+
+  Future<void> waitForFiles(
+    WidgetTester tester,
+    Directory directory,
+    int expected,
+  ) async {
+    final deadline = DateTime.now().add(const Duration(seconds: 10));
+    while (DateTime.now().isBefore(deadline)) {
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 20)),
+      );
+      await tester.pump(const Duration(milliseconds: 20));
+      final count = await tester.runAsync(() => directory.list().length);
+      if (count == expected) return;
+    }
+    fail('Image operation did not finish with $expected owned files');
+  }
+
   for (final action in ['cancel', 'rejected save', 'save']) {
     testWidgets('$action product image edit preserves original file', (
       tester,
@@ -73,9 +102,33 @@ void main() {
       final paths = PathProviderPlatform.instance;
       PathProviderPlatform.instance = _Paths(directory.path);
       addTearDown(() async {
+        await tester.pumpWidget(const SizedBox.shrink());
+        final decodingDeadline = DateTime.now().add(const Duration(seconds: 10));
+        while (tester.binding.imageCache.pendingImageCount > 0 &&
+            DateTime.now().isBefore(decodingDeadline)) {
+          await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 20)),
+          );
+          await tester.pump(const Duration(milliseconds: 20));
+        }
+        expect(tester.binding.imageCache.pendingImageCount, 0);
+        tester.binding.imageCache.clear();
+        tester.binding.imageCache.clearLiveImages();
         ImagePickerPlatform.instance = picker;
         PathProviderPlatform.instance = paths;
-        await directory.delete(recursive: true);
+        await tester.runAsync(() async {
+          final deadline = DateTime.now().add(const Duration(seconds: 10));
+          while (await directory.exists()) {
+            try {
+              await directory.delete(recursive: true);
+            } on FileSystemException catch (error) {
+              if (error.osError?.errorCode != 32 ||
+                  DateTime.now().isAfter(deadline))
+                rethrow;
+              await Future<void>.delayed(const Duration(milliseconds: 20));
+            }
+          }
+        });
       });
       final repo = _Repository(
         Product(
@@ -105,20 +158,26 @@ void main() {
       final pick = find.text('选择商品图片 / Pick image');
       await tester.ensureVisible(pick);
       await tester.tap(pick);
-      for (var i = 0; i < 8; i++) {
-        await tester.runAsync(
-          () => Future<void>.delayed(const Duration(milliseconds: 30)),
-        );
-        await tester.pump(const Duration(milliseconds: 30));
-      }
+      await waitForFiles(tester, imageDirectory, 2);
+      await waitForState(
+        tester,
+        () => find
+            .byWidgetPredicate((widget) {
+              if (widget is! Image || widget.image is! FileImage) return false;
+              return (widget.image as FileImage).file.path != original.path;
+            })
+            .evaluate()
+            .isNotEmpty,
+      );
       await tester.pumpAndSettle();
       await tester.tap(find.text(action == 'cancel' ? '取消' : '保存'));
-      for (var i = 0; i < 8; i++) {
-        await tester.runAsync(
-          () => Future<void>.delayed(const Duration(milliseconds: 30)),
+      if (action == 'save') {
+        await waitForState(
+          tester,
+          () => repo.commits == 1 && repo.product.imagePath != original.path,
         );
-        await tester.pump(const Duration(milliseconds: 30));
       }
+      await waitForFiles(tester, imageDirectory, action == 'save' ? 2 : 1);
       await tester.pumpAndSettle();
       expect(await tester.runAsync(original.readAsBytes), oldBytes);
       expect(repo.commits, action == 'cancel' ? 0 : 1);

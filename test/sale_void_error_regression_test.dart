@@ -49,6 +49,10 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('作废'));
     await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byType(TextField).last,
+      'Return with changed stock',
+    );
     await tester.tap(find.text('作废').last);
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);

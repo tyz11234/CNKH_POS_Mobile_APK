@@ -1,4 +1,5 @@
 import '../models/purchase_ocr.dart';
+import '../models/money.dart';
 
 class PurchaseInvoiceParser {
   const PurchaseInvoiceParser();
@@ -248,9 +249,8 @@ class PurchaseInvoiceParser {
     }
 
     if (!RegExp(r'^\d+(?:\.\d{1,2})?$').hasMatch(normalized)) return null;
-    final value = double.tryParse(normalized);
-    if (value == null || !value.isFinite) return null;
-    final cents = (value * 100).round();
+    final cents = tryParseRmCents(normalized);
+    if (cents == null) return null;
     return negative ? -cents : cents;
   }
 }

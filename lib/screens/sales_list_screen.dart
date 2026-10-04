@@ -124,7 +124,7 @@ class _SalesListScreenState extends State<SalesListScreen> {
 
   Future<void> _void(SaleRecord s) async {
     final ctrl = TextEditingController();
-    final ok = await showDialog<bool>(
+    final dialog = DialogRoute<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('作废备注 / Void note'),
@@ -138,6 +138,8 @@ class _SalesListScreenState extends State<SalesListScreen> {
         ],
       ),
     );
+    final ok = await Navigator.of(context, rootNavigator: true).push(dialog);
+    await dialog.completed;
     final note = ctrl.text.trim();
     ctrl.dispose();
     if (ok != true || !mounted) return;

@@ -181,7 +181,7 @@ class _ProductsAdminPageState extends State<ProductsAdminPage> {
         : (existing.barcode.trim().isEmpty ? 'auto' : 'manual');
 
     try {
-      final ok = await showDialog<bool>(
+      final dialog = DialogRoute<bool>(
         context: context,
         builder: (ctx) => StatefulBuilder(
           builder: (ctx, setLocal) => AlertDialog(
@@ -335,6 +335,9 @@ class _ProductsAdminPageState extends State<ProductsAdminPage> {
           ),
         ),
       );
+      final ok = await Navigator.of(context, rootNavigator: true).push(dialog);
+      // Focused fields remain mounted until the dialog exit animation ends.
+      await dialog.completed;
       if (ok != true) return;
 
       var code = barcode.text.trim();

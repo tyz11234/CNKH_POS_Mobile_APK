@@ -359,8 +359,9 @@ class _CartScreenState extends State<CartScreen> {
         builder: (_) => BarcodeScanScreen(
           repo: widget.repo,
           onProduct: (p) async {
-            await _add(p);
+            final accepted = await _add(p);
             if (mounted) setState(() {});
+            return accepted;
           },
           onPairing: widget.onPairing,
         ),
