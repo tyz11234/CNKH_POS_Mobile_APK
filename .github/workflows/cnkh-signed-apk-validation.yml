@@ -32,6 +32,9 @@ jobs:
       - name: Flutter analyze
         run: flutter analyze --no-fatal-infos --no-fatal-warnings
 
+      - name: Install PDF metadata tools needed by receipt tests
+        run: sudo apt-get update && sudo apt-get install -y poppler-utils
+
       - name: Flutter tests
         run: flutter test
 
