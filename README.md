@@ -6,6 +6,19 @@
 
 > README 最后更新：**2026-10-08**。默认源码与发布分支：main。
 
+## Android 正式签名：固定 Keystore 与升级安全说明（2026-10-08）
+
+> **当前下载页的 v1.10.10+38 APK 仍为 Debug 签名。** 本节记录的是加入源码的正式签名配置及独立验证工作流，**不代表新的正式签名 APK 已通过 CI、已发布或已完成真机升级验收**。请勿将历史 Debug 包误认为已切换签名。
+
+- 正式签名身份使用固定的 CNKH POS Mobile 密钥；证书 SHA-256 为 `6A:BA:50:A8:9D:F9:52:C1:7A:82:1C:7C:F5:6D:86:1D:6C:22:72:CD:A9:55:5C:E7:65:23:32:92:1A:84:99:C7`（证书指纹可以公开，私钥不能公开）。
+- `android/app/build.gradle.kts` 的 Release 构建必须通过 `CNKH_ANDROID_KEYSTORE_PATH`、`CNKH_ANDROID_KEYSTORE_PASSWORD`、`CNKH_ANDROID_KEY_ALIAS`、`CNKH_ANDROID_KEY_PASSWORD` 提供密钥；**不再允许 Release 自动回退为 Debug 签名**。
+- GitHub 仓库 **Settings → Secrets and variables → Actions → Repository secrets** 配置四项：`CNKH_ANDROID_KEYSTORE_BASE64`（JKS 的 Base64）、`CNKH_ANDROID_KEYSTORE_PASSWORD`、`CNKH_ANDROID_KEY_ALIAS`、`CNKH_ANDROID_KEY_PASSWORD`。密钥和密码不得写进源码、Issue、PR 或构建日志。Base64 不是加密。
+- 在 GitHub **Actions → CNKH signed APK validation (no Release) → Run workflow（main）** 手动运行独立验证；只有密钥及证书指纹符合要求，且 Analyze、测试、培训截图生成、APK 生成、`apksigner` 签名检查和版本校验均通过时，才会生成可下载的 **CNKH_POS_Mobile_OfficialSigned** 工作流 Artifact。此工作流**不会**创建或覆盖 GitHub Release。
+- 现有 `Mobile CI` 的后续正式 tag/`[release]` 发布也必须使用固定证书，签名指纹不符会失败。发布新版本前应提高 `pubspec.yaml` 的 Version Code；不得复用历史 `v1.10.10-mobile` Release 当作新签名产物。
+- **首次由历史 Debug APK 切换到正式签名 APK，不是无损覆盖升级。** 不同签名下 Android 会拒绝覆盖安装；如卸载旧应用，本地 SQLite、SharedPreferences、图片和未同步 Outbox 可能丢失。必须先完成实际可恢复的完整备份与迁移验证，不能只凭“已与 Desktop 同步”就认定所有数据已备份；迁移未验证时不要卸载现有 POS。
+- 正式签名后，未来沿用**同一 Application ID、同一私钥**并递增 Version Code 的 APK 才具备直接覆盖升级条件；仍须验证数据库迁移和真机安装。本次仅更改 Android 打包与发布机制，没有修改 Flutter 页面、收银、数据库结构或 LAN 同步业务逻辑。
+- 私钥应保留多份**离线加密备份**。此密钥曾在聊天交付过程中处理过；正式面向真实门店使用前请评估暴露风险、保护文件访问，并根据安全状况决定是否更换密码或密钥（更换私钥会改变证书指纹并影响后续升级）。
+
 ## 2026-10-08 · Mobile 1.10.10+38 APK 已发布（Debug 签名）
 
 本次修复审查发现的 16 项问题，涵盖购物车折扣、进货金额与商品匹配、未同步销售保护、条码 / SKU 唯一性、电子发票签名、双端销售对账、挂单价格、报表刷新、金额输入和 DuitNow 收据输出。SQLite schema 保持 **v10**，LAN 协议保持 **`cnkh-sync:v1`**。
