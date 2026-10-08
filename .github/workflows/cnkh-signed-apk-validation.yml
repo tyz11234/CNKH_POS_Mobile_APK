@@ -1,0 +1,138 @@
+name: CNKH signed APK validation (no Release)
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/cnkh-signed-apk-validation.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  signed-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      EXPECTED_CERT_SHA256: 6ABA50A89DF952C17A821C7CF56D861D6C2272CDA9555CE7652332921A8499C7
+    steps:
+      - name: Checkout Mobile
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Resolve dependencies
+        run: flutter pub get
+
+      - name: Flutter analyze
+        run: flutter analyze --no-fatal-infos --no-fatal-warnings
+
+      - name: Flutter tests
+        run: flutter test
+
+      - name: Checkout paired Desktop screenshots
+        uses: actions/checkout@v4
+        with:
+          repository: tyz11234/CNKH_POS_Desktop
+          ref: 8acda041983a10ab6f83fdbaae41be7a2e3e2c2c
+          path: .training_desktop
+
+      - name: Capture Desktop training screenshots
+        working-directory: .training_desktop
+        run: |
+          flutter pub get
+          flutter test tool/training_capture_test.dart
+
+      - name: Capture Mobile training screenshots
+        run: |
+          set -euo pipefail
+          flutter test tool/training_capture_test.dart
+          for name in pair backup einvoice_setup einvoice_credentials einvoice_history; do
+            cp ".training_desktop/assets/training/${name}.png" "assets/training/${name}.png"
+            cp ".training_desktop/assets/training/${name}.json" "assets/training/${name}.json"
+          done
+          flutter test tool/training_view_test.dart
+
+      - name: Restore the fixed production keystore (fail closed)
+        env:
+          KEYSTORE_B64: ${{ secrets.CNKH_ANDROID_KEYSTORE_BASE64 }}
+          CNKH_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.CNKH_ANDROID_KEYSTORE_PASSWORD }}
+          CNKH_ANDROID_KEY_ALIAS: ${{ secrets.CNKH_ANDROID_KEY_ALIAS }}
+          CNKH_ANDROID_KEY_PASSWORD: ${{ secrets.CNKH_ANDROID_KEY_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for value in "$KEYSTORE_B64" "$CNKH_ANDROID_KEYSTORE_PASSWORD" "$CNKH_ANDROID_KEY_ALIAS" "$CNKH_ANDROID_KEY_PASSWORD"; do
+            if [[ -z "$value" ]]; then
+              echo "::error::One or more mandatory CNKH_ANDROID_* repository secrets are missing"
+              exit 1
+            fi
+          done
+          key_path="$RUNNER_TEMP/cnkh-pos-release.jks"
+          umask 077
+          printf '%s' "$KEYSTORE_B64" | base64 --decode > "$key_path"
+          test -s "$key_path"
+          chmod 600 "$key_path"
+          keytool -list -v -keystore "$key_path" -storepass "$CNKH_ANDROID_KEYSTORE_PASSWORD" -alias "$CNKH_ANDROID_KEY_ALIAS" > "$RUNNER_TEMP/keytool-certificate.txt"
+          fingerprint=$(grep -m1 -E 'SHA256:' "$RUNNER_TEMP/keytool-certificate.txt" | sed -E 's/.*SHA256:[[:space:]]*//' | tr -d ':' | tr '[:lower:]' '[:upper:]' | tr -d '\r\n')
+          echo "Key certificate SHA-256: $fingerprint"
+          if [[ "$fingerprint" != "$EXPECTED_CERT_SHA256" ]]; then
+            echo "::error::Keystore certificate does not match the approved production key"
+            exit 1
+          fi
+          {
+            echo "CNKH_ANDROID_KEYSTORE_PATH=$key_path"
+            echo "CNKH_ANDROID_KEYSTORE_PASSWORD=$CNKH_ANDROID_KEYSTORE_PASSWORD"
+            echo "CNKH_ANDROID_KEY_ALIAS=$CNKH_ANDROID_KEY_ALIAS"
+            echo "CNKH_ANDROID_KEY_PASSWORD=$CNKH_ANDROID_KEY_PASSWORD"
+          } >> "$GITHUB_ENV"
+
+      - name: Build stable-key signed APK
+        run: flutter build apk --release
+
+      - name: Verify signature, app identity and version
+        shell: bash
+        run: |
+          set -euo pipefail
+          apk="build/app/outputs/flutter-apk/app-release.apk"
+          test -s "$apk"
+          sdk_root="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          signer=$(find "$sdk_root/build-tools" -name apksigner -type f | sort -V | tail -n 1)
+          aapt=$(find "$sdk_root/build-tools" -name aapt -type f | sort -V | tail -n 1)
+          test -x "$signer"
+          test -x "$aapt"
+          "$signer" verify --verbose --print-certs "$apk" > "$RUNNER_TEMP/signature-result.txt"
+          cat "$RUNNER_TEMP/signature-result.txt"
+          cert=$(grep -m1 'Signer #1 certificate SHA-256 digest:' "$RUNNER_TEMP/signature-result.txt" | awk -F': ' '{print $2}' | tr '[:lower:]' '[:upper:]' | tr -d ':[:space:]')
+          test "$cert" = "$EXPECTED_CERT_SHA256" || { echo "::error::APK signer mismatch"; exit 1; }
+          "$aapt" dump badging "$apk" | head -1 | tee "$RUNNER_TEMP/app-identity.txt"
+          grep -q "name='com.cnkh.cnkh_pos_mobile'" "$RUNNER_TEMP/app-identity.txt"
+          version=$(sed -nE 's/^version:[[:space:]]*([^[:space:]]+).*/\1/p' pubspec.yaml)
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+\+[0-9]+$ ]] || { echo "::error::Invalid Flutter version"; exit 1; }
+          version_name="${version%%+*}"
+          version_code="${version##*+}"
+          grep -q "versionCode='$version_code'" "$RUNNER_TEMP/app-identity.txt"
+          grep -q "versionName='$version_name'" "$RUNNER_TEMP/app-identity.txt"
+          python3 tool/verify_training_bundle.py "$apk" --kind mobile
+          mkdir -p dist
+          cp "$apk" "dist/CNKH_POS_Mobile_v${version_name}-${version_code}_OfficialSigned.apk"
+          (cd dist && sha256sum *.apk > SHA256SUMS.txt)
+          cat dist/SHA256SUMS.txt
+
+      - name: Upload verified signed APK for owner review
+        uses: actions/upload-artifact@v4
+        with:
+          name: CNKH_POS_Mobile_OfficialSigned
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Remove restored private key
+        if: always()
+        shell: bash
+        run: rm -f "$RUNNER_TEMP/cnkh-pos-release.jks" "$RUNNER_TEMP/keytool-certificate.txt"
