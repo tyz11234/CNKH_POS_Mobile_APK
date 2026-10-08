@@ -111,9 +111,10 @@ jobs:
           test -x "$aapt"
           "$signer" verify --verbose --print-certs "$apk" > "$RUNNER_TEMP/signature-result.txt"
           cat "$RUNNER_TEMP/signature-result.txt"
-          cert=$(grep -m1 'Signer #1 certificate SHA-256 digest:' "$RUNNER_TEMP/signature-result.txt" | awk -F': ' '{print $2}' | tr '[:lower:]' '[:upper:]' | tr -d ':[:space:]')
+          cert=$(grep -m1 'certificate SHA-256 digest:' "$RUNNER_TEMP/signature-result.txt" | sed -E 's/^.*certificate SHA-256 digest:[[:space:]]*//' | tr '[:lower:]' '[:upper:]' | tr -d ':[:space:]')
           test "$cert" = "$EXPECTED_CERT_SHA256" || { echo "::error::APK signer mismatch"; exit 1; }
-          "$aapt" dump badging "$apk" | head -1 | tee "$RUNNER_TEMP/app-identity.txt"
+          "$aapt" dump badging "$apk" > "$RUNNER_TEMP/app-badging.txt"
+          head -n 1 "$RUNNER_TEMP/app-badging.txt" | tee "$RUNNER_TEMP/app-identity.txt"
           grep -q "name='com.cnkh.cnkh_pos_mobile'" "$RUNNER_TEMP/app-identity.txt"
           version=$(sed -nE 's/^version:[[:space:]]*([^[:space:]]+).*/\1/p' pubspec.yaml)
           [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+\+[0-9]+$ ]] || { echo "::error::Invalid Flutter version"; exit 1; }
