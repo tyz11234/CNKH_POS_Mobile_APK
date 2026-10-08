@@ -9,6 +9,8 @@
 - **仅 Mobile 更新签名/打包配置与版本号**。没有改变收银页面、商品/库存、离线模式、SQLite schema v10、`cnkh-sync:v1`、e-Invoice 同步或其他业务实现。
 - 配套 Desktop 维持 `1.10.10+38`；两端的发布编号暂不同，但 LAN 协议没有变化。
 - 正式 APK 由 GitHub Actions 在使用 Repository Secrets 解码固定密钥后编译；验签与摘要在 Actions 中自动执行，构建失败不会自动发布。
+- **正式发布成功：** [Mobile CI #37801376164](https://github.com/tyz11234/CNKH_POS_Mobile_APK/actions/runs/37801376164) 全部成功，新版 APK 上传至 [v1.10.11-mobile](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/tag/v1.10.11-mobile)。[独立正式签名验证 #37801343338](https://github.com/tyz11234/CNKH_POS_Mobile_APK/actions/runs/37801343338) 同样成功。
+- **正式 APK SHA-256：** `087a338e7961fe7841d7540d0295cc73f0563258e30f293c61f00e6b885eedc6`；文件大小 115,823,471 bytes。
 - 线上实机、打印机、门店网络与历史数据完整迁移尚无实测结果，不应把 CI 通过等同于生产设备验收。
 
 ## 安装与数据安全警告
