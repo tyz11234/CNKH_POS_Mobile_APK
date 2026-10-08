@@ -48,7 +48,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: tyz11234/CNKH_POS_Desktop
-          ref: 02e3574b16d45bf0e13f89f5f1d1b42f50bfa3f3 # Desktop v0.4.0 release source
+          ref: 8acda041983a10ab6f83fdbaae41be7a2e3e2c2c # Paired Desktop 1.10.10+38 release source
           path: .training_desktop
 
       - name: Capture actual Desktop training screens
