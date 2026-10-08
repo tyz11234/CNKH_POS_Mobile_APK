@@ -1,5 +1,14 @@
 # CNKH POS Mobile change log
 
+## 1.10.11+39 — 2026-10-08，首次固定 Release Key 签名的 Mobile 版本
+
+- 仅 Mobile 安装包签名与发布系统更新：使用固定 CNKH Keystore，不允许 Android Release 回退到 Debug 证书，并校验官方证书 SHA-256。
+- 递增 Android versionCode 为 39，versionName 为 1.10.11。配套 Desktop 暂保持 1.10.10+38；Mobile 业务功能与配对协议兼容原版。
+- Flutter 业务功能、页面 UI、商品库存、离线收银、SQLite schema v10、`cnkh-sync:v1`、MyInvois 状态同步均不修改。
+- **升级警告：** 历史 1.10.10+38 及更旧 Debug 签名 APK 不能直接被新证书覆盖；先在旧设备备份并验证恢复，未同步交易未备份时绝不要卸载旧应用。
+- APK 及验证状态以 [GitHub v1.10.11-mobile Release](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/tag/v1.10.11-mobile) 和其 Actions 记录为准。实机安装及生产门店完整迁移仍需现场验收。
+
+
 ## 1.10.10+38 — 2026-10-08，安装包待 CI 构建
 
 - **F01（双端）** 逐行删空购物车时清除整单折扣，下一笔销售不再继承旧折扣。

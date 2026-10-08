@@ -1,3 +1,23 @@
+# CNKH POS Mobile 1.10.11+39 — 正式固定密钥签名
+
+发布日期：2026-10-08。**首次正式 Release Keystore 签名**，不再使用每次可能变化的 Debug 密钥；包名仍为 `com.cnkh.cnkh_pos_mobile`。
+
+## 本次版本
+
+- 正式签名证书 SHA-256：`6A:BA:50:A8:9D:F9:52:C1:7A:82:1C:7C:F5:6D:86:1D:6C:22:72:CD:A9:55:5C:E7:65:23:32:92:1A:84:99:C7`。
+- Android Version Name 为 `1.10.11`，Version Code 为 `39`，用于后续固定签名覆盖升级。
+- **仅 Mobile 更新签名/打包配置与版本号**。没有改变收银页面、商品/库存、离线模式、SQLite schema v10、`cnkh-sync:v1`、e-Invoice 同步或其他业务实现。
+- 配套 Desktop 维持 `1.10.10+38`；两端的发布编号暂不同，但 LAN 协议没有变化。
+- 正式 APK 由 GitHub Actions 在使用 Repository Secrets 解码固定密钥后编译；验签与摘要在 Actions 中自动执行，构建失败不会自动发布。
+- 线上实机、打印机、门店网络与历史数据完整迁移尚无实测结果，不应把 CI 通过等同于生产设备验收。
+
+## 安装与数据安全警告
+
+**这是新的 Android 证书身份，不能直接覆盖历史 Debug 签名的 Mobile APK。** 请勿直接卸载旧 App，也不要以“已同步到 Desktop”替代完整备份。旧应用中 SQLite、SharedPreferences、本地图片和未同步 Outbox 等数据，必须先备份并验证能实际恢复。没有完整可恢复备份时，请保留旧版并停止迁移。首次完成切换后，后续只要证书与包名保持一致、versionCode 正确递增且数据库迁移兼容，新版才可以正常覆盖。
+
+参考 [README 固定密钥与升级说明](README.md#android-正式签名固定-keystore-与升级安全说明2026-10-08)；历史 [1.10.10 Debug 版本](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/tag/v1.10.10-mobile) 继续独立保留，不会被覆盖。
+
+---
 # CNKH POS Mobile 1.10.10+38
 
 发布日期：2026-10-08。**Android APK 已发布并核验，按维护者要求使用 Debug 签名。** 数据库 schema 保持 v10，LAN 协议保持 `cnkh-sync:v1`。
