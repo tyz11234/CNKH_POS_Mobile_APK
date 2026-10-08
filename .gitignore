@@ -3,3 +3,9 @@ build/
 *.iml
 .idea/
 .training_desktop/
+
+# Android signing credentials — never commit private keys
+*.jks
+*.keystore
+android/key.properties
+*release-base64*.txt
