@@ -171,7 +171,7 @@ jobs:
           fi
           if [[ "$GITHUB_EVENT_NAME" != "pull_request" ]]; then
             expected_cert="6ABA50A89DF952C17A821C7CF56D861D6C2272CDA9555CE7652332921A8499C7"
-            actual_cert=$(grep -m1 'Signer #1 certificate SHA-256 digest:' /tmp/apk-signing-cert.txt | awk -F': ' '{print $2}' | tr '[:lower:]' '[:upper:]' | tr -d ':[:space:]')
+            actual_cert=$(grep -m1 'certificate SHA-256 digest:' /tmp/apk-signing-cert.txt | sed -E 's/^.*certificate SHA-256 digest:[[:space:]]*//' | tr '[:lower:]' '[:upper:]' | tr -d ':[:space:]')
             if [[ "$actual_cert" != "$expected_cert" ]]; then
               echo '::error::Release APK certificate fingerprint does not match the fixed CNKH release key.' >&2
               exit 1
