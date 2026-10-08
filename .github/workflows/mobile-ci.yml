@@ -81,7 +81,6 @@ jobs:
           CNKH_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.CNKH_ANDROID_KEYSTORE_PASSWORD }}
           CNKH_ANDROID_KEY_ALIAS: ${{ secrets.CNKH_ANDROID_KEY_ALIAS }}
           CNKH_ANDROID_KEY_PASSWORD: ${{ secrets.CNKH_ANDROID_KEY_PASSWORD }}
-          CNKH_DEBUG_RELEASE_ALLOWED: ${{ github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[debug-release]') }}
         shell: bash
         run: |
           set -euo pipefail
@@ -89,7 +88,6 @@ jobs:
           store_password=""
           key_alias=""
           key_password=""
-          allow_debug_release="false"
           if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
             key_path="$RUNNER_TEMP/cnkh-pr-validation.jks"
             store_password="pr-validation-only"
@@ -110,14 +108,10 @@ jobs:
             key_password="$CNKH_ANDROID_KEY_PASSWORD"
             printf '%s' "$CNKH_ANDROID_KEYSTORE_BASE64" | base64 --decode > "$key_path"
             test -s "$key_path"
-          elif [[ "$CNKH_DEBUG_RELEASE_ALLOWED" == "true" ]]; then
-            allow_debug_release="true"
-            echo "::warning::This explicitly authorized release will use the Android Debug signing key."
           else
-            echo '::error::Android release signing secrets are required unless the main commit explicitly includes [debug-release].'
+            echo '::error::Production release requires all four Android signing secrets.'
             exit 1
           fi
-          echo "CNKH_ALLOW_DEBUG_RELEASE=$allow_debug_release" >> "$GITHUB_ENV"
           if [[ -n "$key_path" ]]; then
             {
               echo "CNKH_ANDROID_KEYSTORE_PATH=$key_path"
@@ -172,10 +166,14 @@ jobs:
           fi
           "$signer" verify --print-certs "$apk" | tee /tmp/apk-signing-cert.txt
           if grep -qi 'CN=Android Debug' /tmp/apk-signing-cert.txt; then
-            if [[ "$CNKH_ALLOW_DEBUG_RELEASE" == "true" ]]; then
-              echo '::warning::This explicitly authorized APK uses the Android Debug signing certificate.'
-            else
-              echo 'Release APK must not use the Android debug certificate' >&2
+            echo 'Release APK must not use the Android debug certificate' >&2
+            exit 1
+          fi
+          if [[ "$GITHUB_EVENT_NAME" != "pull_request" ]]; then
+            expected_cert="6ABA50A89DF952C17A821C7CF56D861D6C2272CDA9555CE7652332921A8499C7"
+            actual_cert=$(grep -m1 'Signer #1 certificate SHA-256 digest:' /tmp/apk-signing-cert.txt | awk -F': ' '{print $2}' | tr '[:lower:]' '[:upper:]' | tr -d ':[:space:]')
+            if [[ "$actual_cert" != "$expected_cert" ]]; then
+              echo '::error::Release APK certificate fingerprint does not match the fixed CNKH release key.' >&2
               exit 1
             fi
           fi
