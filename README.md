@@ -6,7 +6,7 @@
 
 > README 最后更新：**2026-10-08**。默认源码与发布分支：main。
 
-## 2026-10-08 · Mobile 1.10.10+38 修复发布准备
+## 2026-10-08 · Mobile 1.10.10+38 APK 已发布（Debug 签名）
 
 本次修复审查发现的 16 项问题，涵盖购物车折扣、进货金额与商品匹配、未同步销售保护、条码 / SKU 唯一性、电子发票签名、双端销售对账、挂单价格、报表刷新、金额输入和 DuitNow 收据输出。SQLite schema 保持 **v10**，LAN 协议保持 **`cnkh-sync:v1`**。
 
@@ -21,36 +21,46 @@
 
 | 项目 | 本次源码版本 | 本次安装包状态 |
 | --- | --- | --- |
-| Desktop | **1.10.10+38** | Windows x64 Setup.exe 与 ZIP 待 CI 构建、核验及上传 |
-| Mobile | **1.10.10+38** | Android APK 待 CI 构建、签名核验及上传 |
+| Desktop | **1.10.10+38** | Windows x64 Setup.exe 与 ZIP 已发布并校验 |
+| Mobile | **1.10.10+38** | Android APK 已发布并校验（Debug 签名） |
 | 数据兼容 | schema v10 / cnkh-sync:v1 | 保留现有数据库增量迁移 |
 
 ## 下载与更新
 
-**本版下载区待构建和核验完成后更新。下表暂不表示安装包已经发布。**
+Windows 与 Android **1.10.10+38** 已发布，均已从 GitHub 重新下载并通过校验。Android 包按维护者要求使用 Debug 签名。
 
-| 本次产物 | 版本 | 下载 / 校验状态 |
+| 本次产物 | 版本 | 下载 / 状态 |
 | --- | --- | --- |
-| Windows x64 Setup.exe 安装包 | 1.10.10+38 | 待上传；大小与 SHA-256 待核验 |
-| Windows x64 ZIP 便携包 | 1.10.10+38 | 待上传；大小与 SHA-256 待核验 |
-| Android APK | 1.10.10+38 | 待上传；大小、SHA-256 与签名待核验 |
+| Windows x64 Setup.exe 安装包 | 1.10.10+38 | [下载安装包](https://github.com/tyz11234/CNKH_POS_Desktop/releases/download/v1.10.10/CNKH_POS_Desktop-windows-x64-v1.10.10-38-Setup.exe) |
+| Windows x64 ZIP 便携包 | 1.10.10+38 | [下载便携包](https://github.com/tyz11234/CNKH_POS_Desktop/releases/download/v1.10.10/CNKH_POS_Desktop-windows-x64-v1.10.10-38.zip) |
+| Android APK | 1.10.10+38 | [下载 APK](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/download/v1.10.10-mobile/CNKH_POS_Mobile.apk)（Debug 签名） |
 
-已发布旧版本可在 [Desktop Releases](https://github.com/tyz11234/CNKH_POS_Desktop/releases) 和 [Mobile Releases](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases) 查找。旧包不包含本次 16 项修复；历史版本及校验记录见下方折叠区域。
+[Windows Release v1.10.10](https://github.com/tyz11234/CNKH_POS_Desktop/releases/tag/v1.10.10) · [SHA-256 校验文件](https://github.com/tyz11234/CNKH_POS_Desktop/releases/download/v1.10.10/SHA256SUMS.txt)
 
-Windows 更新前先备份业务数据并关闭程序。使用便携 ZIP 时，解压到独立目录并保留 EXE、DLL 和 `data` 文件夹；本次 Setup.exe 的实际产物状态以发布后的下载区为准。
+[Mobile Release v1.10.10-mobile](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/tag/v1.10.10-mobile) · [版本化 APK](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/download/v1.10.10-mobile/CNKH_POS_Mobile_v1.10.10.apk) · [APK SHA-256 校验文件](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/download/v1.10.10-mobile/SHA256SUMS.txt)
 
-Android 现有 1.10.7+35 APK 使用 Debug 证书，证书 SHA-256 为 `51d08c3a894a972f03cfd99dac38a468ffba9de58f0062f6a3bba5b07da57406`。**本次 APK 的签名和覆盖安装兼容性尚待核验。** 更新前同步业务并备份；如果 Android 报告签名不匹配，保留旧应用，不要卸载仍存有未同步业务的版本。
+| 发布文件 | 字节数 | SHA-256 |
+| --- | ---: | --- |
+| CNKH_POS_Desktop-windows-x64-v1.10.10-38-Setup.exe | 15168784 | `9e52049b4ca56cddd4147b5ed908a4251bdddb4e82dc4a2513976399b7427b34` |
+| CNKH_POS_Desktop-windows-x64-v1.10.10-38.zip | 18350569 | `aa099af7b5153c05707324f068f74f33d0a88d3203ee329733383f3924e96f7b` |
+| CNKH_POS_Mobile.apk（版本化 APK 内容相同） | 115822239 | `5b7ac868de253bd72b66b8cdf1df6d289464632fc85836f7d1beab1f19ea160b` |
+
+Windows 更新前先备份业务数据并关闭程序。Setup.exe 按当前用户安装到 `%LOCALAPPDATA%\Programs\CNKH POS Desktop`，支持 Windows 10 1809 及以上的 x64 环境；安装及卸载只管理程序目录，不迁移或清除文档目录中的业务数据库。便携 ZIP 请解压到独立目录，保留 EXE、DLL 和 `data` 文件夹。安装器未配置 Windows 代码签名，可用上述 SHA-256 校验下载文件。
+
+本次 Android APK 是 Release 构建，按维护者要求使用 **Android Debug 签名**；证书 SHA-256：`5e52d71bf713265e9e8fffb0606d3c903c0250f6cf541f3ee6d9a4b2954099e9`。**本次证书与已发布的 1.10.7+35 不同，无法直接覆盖安装旧版。** 请先同步并备份业务，保留仍有未同步数据的旧应用。此 Debug 密钥不保证在后续构建中复用；签名不匹配时 Android 会拒绝覆盖安装。
+
+历史版本可在 [Desktop Releases](https://github.com/tyz11234/CNKH_POS_Desktop/releases) 和 [Mobile Releases](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases) 查找，旧包不包含本次全部修复。
 
 ## 本次验证
 
-- Mobile 完整测试 **187 项通过**；随后调整收款测试的异步等待方式，该用例定点复测通过。
-- Desktop 完整测试 **187 项通过，1 项因测试固定等待时间不足失败**；改为等待实际付款完成条件后，该用例及电子发票测试共 **25 项定点复测通过**。这不是一次重新执行的全量通过记录。
-- 两端真实 HTTP / WebSocket 配套回归 **29 项通过**。
-- 两端 `flutter analyze` 未发现 error；保留原有 warning / info。
-- 独立 ZXing 解码验证通过：两端 12 位条码均读回原内容；两端 PDF 及 384 / 576 dots ESC/POS 栅格中的 6 个二维码产物均读回正确测试内容。
-- `git diff --check`、修复源码包完整性和补丁应用检查通过。
+- Desktop 发布流水线 [37782987933](https://github.com/tyz11234/CNKH_POS_Desktop/actions/runs/37782987933) 全部成功：完整测试 **188 项通过**，培训截图及图片显示测试通过，Windows Release 编译、11 组培训资源、安装器及便携 ZIP 验证通过。首次安装和重复安装均核对 **56 个文件**的 SHA-256，安装测试没有启动 POS。
+- Mobile 发布流水线 [37784970334](https://github.com/tyz11234/CNKH_POS_Mobile_APK/actions/runs/37784970334) 全部成功：完整测试 **187 项通过**，双端培训截图、图片显示、APK Release 编译、培训资源、INTERNET 权限及 `apksigner` 签名验证通过。
+- 两端真实 HTTP / WebSocket 配套回归 [37784970356](https://github.com/tyz11234/CNKH_POS_Mobile_APK/actions/runs/37784970356) **29 项通过**；实际配对源码为 Desktop `8acda041983a10ab6f83fdbaae41be7a2e3e2c2c` 与 Mobile `c016ce1c90bdcff11ed63f0a2cfc562dc4ee93e9`。Desktop 发布提交 `9ae58847a43a3a70f481a22ba246591c0eb9f3b9` 仅追加安装器版本检测修正，业务源码相同。
+- 两端 CI 的 `flutter analyze --no-fatal-infos --no-fatal-warnings` 均通过，未发现 error；保留原有 warning / info。
+- 本地独立 ZXing 解码验证通过：两端 12 位条码均读回原内容；两端 PDF 及 384 / 576 dots ESC/POS 栅格中的 6 个二维码产物均读回正确测试内容。
+- 本地 `git diff --check`、修复源码包完整性和补丁应用检查通过。
 
-以上为发布前本地验证。1.10.10+38 的 GitHub Actions 构建结果、产物大小、SHA-256 和 APK 签名核验待完成后补充。实体 Windows / Android 设备、打印机、门店网络和 MyInvois Sandbox / Production 线上验收未执行。
+Windows EXE 与 ZIP 已从正式 Release 重新下载，SHA-256、ZIP 完整性、x64 程序、运行库和 11 组培训图片 / 箭头元数据验证通过。Android APK 校验通过：包名 `com.cnkh.cnkh_pos_mobile`、版本 `1.10.10` / build `38`、3 种架构、16 组培训图片 / 箭头元数据及 Debug 证书指纹均已核对。实体 Windows / Android 设备、打印机、门店网络和 MyInvois Sandbox / Production 线上验收未执行。
 
 <details>
 <summary>历史记录：1.10.9+37 源码、旧版安装包和验证（2026-10-03）</summary>
@@ -200,7 +210,7 @@ GitHub Actions 已实际执行：Mobile 完整测试 **124 项**、Desktop **116
 
 ### 开发与验证
 
-完整变更、测试结果、构建记录及已知范围见 [EINVOICE_REPORT.md](EINVOICE_REPORT.md)。手机培训截图使用既有 Desktop `v0.4.0` 源码 `02e3574b`；双端 HTTP 联调读取 `.github/paired-*-ref` 固定已验证源码，手动运行可指定 companion ref。
+完整变更、测试结果、构建记录及已知范围见 [EINVOICE_REPORT.md](EINVOICE_REPORT.md)。手机培训截图使用发布工作流固定的 Desktop 源码 `8acda041983a10ab6f83fdbaae41be7a2e3e2c2c`；双端 HTTP 联调读取 `.github/paired-*-ref` 固定配套源码，手动运行可指定 companion ref。
 
 发布 CI 执行 `flutter analyze --no-fatal-infos --no-fatal-warnings`、完整 `flutter test`、真实页面截图捕获，再执行 Windows/APK Release 构建。截图先生成到 `assets/training/` 再打包。源码首次运行前也需要生成截图；Mobile 截图流程须准备 `.training_desktop` 源码及其字体，参照 `mobile-ci.yml`。双端真实 HTTP 回归位于 Desktop `integration/`，运行 `flutter test test regression`。
 
