@@ -10,7 +10,8 @@
 
 **首次正式签名版本：** Mobile 1.10.11+39，新证书身份；原有 [1.10.10+38 Debug Release](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/tag/v1.10.10-mobile) 完整保留，不覆盖、不重新命名。
 
-- [GitHub 1.10.11 Mobile 正式签名发布页](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/tag/v1.10.11-mobile)（是否已正式发布及安装包 SHA-256，请以 Release 页面实时显示为准；流水线未完成时该链接可能尚不存在）
+- **已正式发布：** [下载 1.10.11+39 官方签名 APK](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/download/v1.10.11-mobile/CNKH_POS_Mobile.apk) · [查看 Release](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/tag/v1.10.11-mobile) · [SHA256SUMS.txt](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/download/v1.10.11-mobile/SHA256SUMS.txt)。
+- **官方 APK SHA-256：** `087a338e7961fe7841d7540d0295cc73f0563258e30f293c61f00e6b885eedc6`（115,823,471 bytes）；[正式 Release CI](https://github.com/tyz11234/CNKH_POS_Mobile_APK/actions/runs/37801376164) 已通过；[独立签名验证](https://github.com/tyz11234/CNKH_POS_Mobile_APK/actions/runs/37801343338) 已通过。
 - 本次仅更新 Mobile 签名和版本号；Flutter 页面与业务代码未修改，SQLite schema v10、LAN `cnkh-sync:v1` 不变。Desktop 仍为 1.10.10+38。
 - **首次换签不可覆盖旧 Debug 包。** 如有收银数据，请先完成可恢复的全量备份及实测迁移；未验证前不要卸载旧 App。
 
@@ -43,32 +44,32 @@
 | 项目 | 本次源码版本 | 本次安装包状态 |
 | --- | --- | --- |
 | Desktop | **1.10.10+38** | Windows x64 Setup.exe 与 ZIP 已发布并校验 |
-| Mobile | **1.10.10+38** | Android APK 已发布并校验（Debug 签名） |
+| Mobile | **1.10.11+39** | 正式固定密钥签名 Android APK 已发布，CI 验签通过 |
 | 数据兼容 | schema v10 / cnkh-sync:v1 | 保留现有数据库增量迁移 |
 
 ## 下载与更新
 
-Windows 与 Android **1.10.10+38** 已发布，均已从 GitHub 重新下载并通过校验。Android 包按维护者要求使用 Debug 签名。
+Desktop **1.10.10+38** 继续使用原有 Windows 安装包，Mobile **1.10.11+39** 已发布独立的正式固定密钥签名 APK。原 Mobile 1.10.10+38（Debug）仅作为历史版本保留。新的正式 APK 不能覆盖历史不同证书的 Debug 安装包。
 
 | 本次产物 | 版本 | 下载 / 状态 |
 | --- | --- | --- |
 | Windows x64 Setup.exe 安装包 | 1.10.10+38 | [下载安装包](https://github.com/tyz11234/CNKH_POS_Desktop/releases/download/v1.10.10/CNKH_POS_Desktop-windows-x64-v1.10.10-38-Setup.exe) |
 | Windows x64 ZIP 便携包 | 1.10.10+38 | [下载便携包](https://github.com/tyz11234/CNKH_POS_Desktop/releases/download/v1.10.10/CNKH_POS_Desktop-windows-x64-v1.10.10-38.zip) |
-| Android APK | 1.10.10+38 | [下载 APK](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/download/v1.10.10-mobile/CNKH_POS_Mobile.apk)（Debug 签名） |
+| Android APK | **1.10.11+39** | [下载正式签名 APK](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/download/v1.10.11-mobile/CNKH_POS_Mobile.apk)（固定 Keystore） |
 
 [Windows Release v1.10.10](https://github.com/tyz11234/CNKH_POS_Desktop/releases/tag/v1.10.10) · [SHA-256 校验文件](https://github.com/tyz11234/CNKH_POS_Desktop/releases/download/v1.10.10/SHA256SUMS.txt)
 
-[Mobile Release v1.10.10-mobile](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/tag/v1.10.10-mobile) · [版本化 APK](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/download/v1.10.10-mobile/CNKH_POS_Mobile_v1.10.10.apk) · [APK SHA-256 校验文件](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/download/v1.10.10-mobile/SHA256SUMS.txt)
+[Mobile Release v1.10.11-mobile（正式签名）](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/tag/v1.10.11-mobile) · [版本化 APK](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/download/v1.10.11-mobile/CNKH_POS_Mobile_v1.10.11.apk) · [新版 APK SHA-256 校验文件](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/download/v1.10.11-mobile/SHA256SUMS.txt) · [历史 Debug Release v1.10.10](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/tag/v1.10.10-mobile)
 
 | 发布文件 | 字节数 | SHA-256 |
 | --- | ---: | --- |
 | CNKH_POS_Desktop-windows-x64-v1.10.10-38-Setup.exe | 15168784 | `9e52049b4ca56cddd4147b5ed908a4251bdddb4e82dc4a2513976399b7427b34` |
 | CNKH_POS_Desktop-windows-x64-v1.10.10-38.zip | 18350569 | `aa099af7b5153c05707324f068f74f33d0a88d3203ee329733383f3924e96f7b` |
-| CNKH_POS_Mobile.apk（版本化 APK 内容相同） | 115822239 | `5b7ac868de253bd72b66b8cdf1df6d289464632fc85836f7d1beab1f19ea160b` |
+| CNKH_POS_Mobile.apk（**1.10.11+39 正式签名**） | 115823471 | `087a338e7961fe7841d7540d0295cc73f0563258e30f293c61f00e6b885eedc6` |
 
 Windows 更新前先备份业务数据并关闭程序。Setup.exe 按当前用户安装到 `%LOCALAPPDATA%\Programs\CNKH POS Desktop`，支持 Windows 10 1809 及以上的 x64 环境；安装及卸载只管理程序目录，不迁移或清除文档目录中的业务数据库。便携 ZIP 请解压到独立目录，保留 EXE、DLL 和 `data` 文件夹。安装器未配置 Windows 代码签名，可用上述 SHA-256 校验下载文件。
 
-本次 Android APK 是 Release 构建，按维护者要求使用 **Android Debug 签名**；证书 SHA-256：`5e52d71bf713265e9e8fffb0606d3c903c0250f6cf541f3ee6d9a4b2954099e9`。**本次证书与已发布的 1.10.7+35 不同，无法直接覆盖安装旧版。** 请先同步并备份业务，保留仍有未同步数据的旧应用。此 Debug 密钥不保证在后续构建中复用；签名不匹配时 Android 会拒绝覆盖安装。
+历史 Mobile 1.10.10 APK 是 Release 构建但使用 **Android Debug 签名**；证书 SHA-256：`5e52d71bf713265e9e8fffb0606d3c903c0250f6cf541f3ee6d9a4b2954099e9`。**本次证书与已发布的 1.10.7+35 不同，无法直接覆盖安装旧版。** 请先同步并备份业务，保留仍有未同步数据的旧应用。此 Debug 密钥不保证在后续构建中复用；签名不匹配时 Android 会拒绝覆盖安装。
 
 历史版本可在 [Desktop Releases](https://github.com/tyz11234/CNKH_POS_Desktop/releases) 和 [Mobile Releases](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases) 查找，旧包不包含本次全部修复。
 
