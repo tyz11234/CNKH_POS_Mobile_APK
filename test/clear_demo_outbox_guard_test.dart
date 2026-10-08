@@ -2,7 +2,7 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:cnkh_pos_mobile/db/app_database.dart';
-import 'package:cnkh_pos_mobile/models/product.dart';
+import 'package:cnkh_pos_mobile/models/cart_item.dart';
 import 'package:cnkh_pos_mobile/models/purchase_ocr.dart';
 import 'package:cnkh_pos_mobile/services/pos_repository.dart';
 import 'package:cnkh_pos_mobile/services/purchase_ocr_repository.dart';
@@ -126,9 +126,14 @@ void main() {
   );
 
   for (final blockedKind in [
+    'sale_upload',
+    'sale_void',
+    'stocktake',
     'purchase',
     'purchase_attachment',
     'purchase_reverse',
+    'credit_payment',
+    'future_transaction',
   ]) {
     test(
       'pending $blockedKind alone blocks clear and preserves unrelated operations',
@@ -163,6 +168,99 @@ void main() {
         }
       },
     );
+  }
+
+  for (final hasOutbox in [true, false]) {
+    test(
+      'offline sale ${hasOutbox ? "with" : "without"} outbox survives clear until acknowledged',
+      () async {
+        final dir = await Directory.systemTemp.createTemp('cnkh-clear-sale-');
+        final database = AppDatabase.forTesting(
+          '${dir.path}/mobile.db',
+          seed: false,
+        );
+        final repo = PosRepository(database: database);
+        try {
+          final db = await database.db;
+          const product = Product(
+            id: 'p1',
+            nameZh: '商品',
+            nameEn: 'Product',
+            sku: 'P1',
+            barcode: '10001',
+            priceCents: 100,
+            stock: 10,
+          );
+          await db.insert('products', product.toMap());
+          final sale = await repo.createSale(
+            cart: CartState(items: [CartItem(product: product, qty: 2)]),
+            paymentMethod: 'CASH',
+            paidCents: 200,
+            cashier: 'staff',
+          );
+          if (!hasOutbox) {
+            // Pre-outbox versions can leave an empty sync timestamp and no op.
+            await db.delete('sync_outbox');
+            await db.update('sales', {'synced_at': ''});
+          }
+          final before = {
+            for (final table in ['sales', 'stock_moves', 'sync_outbox'])
+              table: await db.query(table),
+          };
+          await expectLater(
+            database.clearDemoTransactionalData(),
+            throwsA(isA<StateError>().having(
+              (error) => error.message,
+              'message',
+              contains('销售尚未获电脑确认'),
+            )),
+          );
+          for (final entry in before.entries) {
+            expect(await db.query(entry.key), entry.value);
+          }
+          expect((await repo.getProduct('p1'))!.stock, 8);
+
+          // Once Desktop acknowledges both the sale and its operation, the
+          // explicit maintenance action is allowed again.
+          await db.update(
+            'sales',
+            {'synced_at': DateTime.now().toUtc().toIso8601String()},
+            where: 'id=?',
+            whereArgs: [sale.id],
+          );
+          await db.delete('sync_outbox');
+          await database.clearDemoTransactionalData();
+          expect(await db.query('sales'), isEmpty);
+          expect(await db.query('stock_moves'), isEmpty);
+        } finally {
+          await database.close();
+          await dir.delete(recursive: true);
+        }
+      },
+    );
+  }
+
+  for (final state in ['sent', 'needs_review', 'rejected']) {
+    test('unresolved sale void in $state state still blocks clear', () async {
+      final dir = await Directory.systemTemp.createTemp('cnkh-clear-void-');
+      final database = AppDatabase.forTesting('${dir.path}/mobile.db');
+      try {
+        final db = await database.db;
+        await queueMutation(db, 'sale_void', 'sale-1', {
+          'client_sale_id': 'sale-1',
+        });
+        await db.update('sync_outbox', {'delivery_state': state});
+        final before = await db.query('sync_outbox');
+        await expectLater(
+          database.clearDemoTransactionalData(),
+          throwsA(isA<StateError>()),
+        );
+        expect(await db.query('sync_outbox'), before);
+      } finally {
+        await database.close();
+        await dir.delete(recursive: true);
+      }
+    });
   }
 
   test(

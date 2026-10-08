@@ -432,21 +432,36 @@ CREATE TABLE IF NOT EXISTS barcode_print_queue (
   Future<void> clearDemoTransactionalData() async {
     final d = await db;
     await d.transaction((txn) async {
-      // A purchase/attachment/reversal request may have reached Desktop even
-      // when its ACK was lost. Keep every local transaction and attachment
-      // until those operation IDs are acknowledged; unrelated outbox entries
-      // are never deleted by this maintenance action.
-      final pendingPurchase = await txn.query(
+      // Legacy/offline sales may not have an outbox row. Check them in the
+      // same transaction as the cleanup so no unacknowledged sale is erased.
+      final unsyncedSales = await txn.query(
+        'sales',
+        columns: const ['id'],
+        where: "synced_at IS NULL OR synced_at=''",
+        limit: 1,
+      );
+      if (unsyncedSales.isNotEmpty) {
+        throw StateError(
+          '无法清除交易：仍有销售尚未获电脑确认。'
+          '请先完成同步并确认电脑已收到，再重试。',
+        );
+      }
+      // A transactional request may have reached Desktop even when its ACK
+      // was lost. Only catalog/contact edits are independent of the history
+      // removed here; retain and block every other operation, including review
+      // and rejected requests, until the user resolves them through sync.
+      final pendingTransaction = await txn.query(
         'sync_outbox',
         columns: const ['id', 'kind', 'delivery_state'],
-        where: "kind IN ('purchase','purchase_attachment','purchase_reverse')",
+        where: "kind NOT IN ('product_upsert','customer_upsert',"
+            "'supplier_upsert','category_upsert')",
         orderBy: 'seq ASC',
         limit: 1,
       );
-      if (pendingPurchase.isNotEmpty) {
+      if (pendingTransaction.isNotEmpty) {
         throw StateError(
-          '无法清除交易：仍有未确认的进货、附件或进货撤销同步请求。'
-          '请先完成同步并确认电脑已收到，再重试。',
+          '无法清除交易：仍有未确认的销售、作废、进货、附件或库存同步请求。'
+          '请先完成同步，处理待核对请求并确认电脑已收到，再重试。',
         );
       }
       for (final table in [

@@ -12,8 +12,11 @@ import 'package:url_launcher/url_launcher.dart';
 import 'pos_repository.dart';
 import '../db/app_database.dart';
 import 'owned_receipt_cache.dart';
+
 import 'package:path/path.dart' as p;
+
 import 'receipt_template.dart';
+import 'receipt_qr.dart';
 
 export 'receipt_template.dart'
     show
@@ -163,12 +166,15 @@ Future<File> writeReceiptPdfTemp(
     );
   }
   final text = effective.renderFromSale(sale);
+  final qr = effective.showDuitNowQr ? await ReceiptQrImage.load() : null;
+  final qrImage = qr == null ? null : pw.MemoryImage(qr.pngBytes());
   final fontData = await rootBundle.load('assets/fonts/NotoSansSC-Regular.ttf');
   final font = pw.Font.ttf(fontData);
   final doc = pw.Document();
   // Keep the 80mm receipt width while allowing long receipts to paginate.
   const pageWidth = 80.0 * PdfPageFormat.mm;
   final lines = text.split('\n');
+  final style = pw.TextStyle(font: font, fontSize: 7.5, lineSpacing: 1.2);
   doc.addPage(
     pw.MultiPage(
       pageFormat: PdfPageFormat(
@@ -180,10 +186,21 @@ Future<File> writeReceiptPdfTemp(
       // MultiPage can split this list between pages. A single Column containing
       // every receipt line is indivisible and still overflows on long sales.
       build: (ctx) => [
-        for (final line in lines)
-          pw.Text(
-            line,
-            style: pw.TextStyle(font: font, fontSize: 7.5, lineSpacing: 1.2),
+        for (final line in lines) pw.Text(line, style: style),
+        if (qrImage != null)
+          pw.Center(
+            child: pw.Column(
+              children: [
+                pw.SizedBox(height: 4 * PdfPageFormat.mm),
+                pw.Text('DuitNow QR / Scan to pay / 扫码付款', style: style),
+                pw.Image(
+                  qrImage,
+                  width: 60 * PdfPageFormat.mm,
+                  height: 60 * PdfPageFormat.mm,
+                  fit: pw.BoxFit.contain,
+                ),
+              ],
+            ),
           ),
       ],
     ),
@@ -255,9 +272,8 @@ Future<String> defaultEReceiptCachePath() async {
 Future<Directory> eReceiptCacheDir({PosRepository? repo}) async {
   String custom = '';
   try {
-    custom = (await (repo ?? PosRepository()).getSetting(
-      kEReceiptCacheDirKey,
-    )).trim();
+    custom = (await (repo ?? PosRepository()).getSetting(kEReceiptCacheDirKey))
+        .trim();
   } catch (_) {}
   final path = custom.isNotEmpty ? custom : await defaultEReceiptCachePath();
   final dir = Directory(p.join(path, OwnedReceiptCache.folder));

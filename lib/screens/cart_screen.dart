@@ -205,7 +205,8 @@ class _CartScreenState extends State<CartScreen> {
   void _adjust(CartItem item, int delta) {
     item.qty += delta;
     if (item.qty <= 0) {
-      widget.cart.items.remove(item);
+      _remove(item);
+      return;
     } else {
       item.discountCents = clampDiscountCents(
         item.discountCents,
@@ -217,6 +218,7 @@ class _CartScreenState extends State<CartScreen> {
 
   void _remove(CartItem item) {
     widget.cart.items.remove(item);
+    if (widget.cart.items.isEmpty) widget.cart.orderDiscountCents = 0;
     widget.onChanged();
   }
 

@@ -1,5 +1,6 @@
 import 'catalog_stock_baseline.dart';
 import 'einvoice/einvoice_status_store.dart';
+
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
@@ -19,6 +20,13 @@ import 'purchase_reverse_sync.dart';
 const String kPairingPrefix = 'cnkh-sync:v1|';
 
 enum SyncLinkState { offline, connected, pending }
+
+/// Inventory cannot be replaced while local mutations are still outstanding.
+/// The independent tax-status mirror can nevertheless continue to refresh.
+class _CatalogSyncDeferred implements Exception {
+  @override
+  String toString() => '本地操作待同步，商品目录和库存暂缓更新';
+}
 
 class LanSyncConfig {
   final String baseUrl;
@@ -180,12 +188,26 @@ class LanSyncClient {
         full ||
         catalogCursorRolledBack ||
         (stockMovesSupported && hostStockCursor < localStockCursor);
-    final a = await _pullCatalog(
-      cfg,
-      stockMovesSupported: stockMovesSupported,
-      fullStockMoves: fullStockMoves,
-    );
-    final b = await _pullSales(cfg);
+    String a;
+    var catalogDeferred = false;
+    try {
+      a = await _pullCatalog(
+        cfg,
+        stockMovesSupported: stockMovesSupported,
+        fullStockMoves: fullStockMoves,
+      );
+    } on _CatalogSyncDeferred catch (e) {
+      // A tax review must retain the inventory barrier without blocking the
+      // very tax status needed to resolve that review.
+      a = '$e';
+      catalogDeferred = true;
+    }
+    // Sales depend on the catalog's customer/product ID mappings. Pulling and
+    // acknowledging them before those mappings exist would permanently lose
+    // customer credit associations and leave remote IDs in receipt lines.
+    final b = catalogDeferred
+        ? '关联销售暂缓更新，待商品和客户资料同步后重试'
+        : await _pullSales(cfg);
     await pushBarcodeQueue(cfg);
     if ((h['capabilities'] as List? ?? []).contains('einvoice_status_v1')) {
       try {
@@ -194,7 +216,9 @@ class LanSyncClient {
       } catch (_) {
         await repo.setSetting(
           'einvoice_status_sync_error',
-          'e-Invoice 状态同步失败，保留上次结果；销售同步已完成。',
+          catalogDeferred
+              ? 'e-Invoice 状态同步失败，保留上次结果；商品及销售仍待同步。'
+              : 'e-Invoice 状态同步失败，保留上次结果；销售同步已完成。',
         );
       }
     }
@@ -240,9 +264,8 @@ class LanSyncClient {
     final rows = <Map<String, dynamic>>[];
     var after = '';
     while (true) {
-      final uri = Uri.parse(
-        '${cfg.normalizedBase}/api/v1/einvoices',
-      ).replace(queryParameters: {'after': after, 'status_version': '2'});
+      final uri = Uri.parse('${cfg.normalizedBase}/api/v1/einvoices')
+          .replace(queryParameters: {'after': after, 'status_version': '2'});
       final response = await _requestClient
           .get(uri, headers: _headers(cfg))
           .timeout(const Duration(seconds: 20));
@@ -256,9 +279,8 @@ class LanSyncClient {
         throw const FormatException('Invalid status pagination');
       after = next;
     }
-    await EInvoiceStatusStore(
-      await _db.db,
-    ).replaceSnapshot(cfg.normalizedBase, rows);
+    await EInvoiceStatusStore(await _db.db)
+        .replaceSnapshot(cfg.normalizedBase, rows);
   }
 
   Future<String?> _drainPending(LanSyncConfig cfg) async {
@@ -480,28 +502,50 @@ class LanSyncClient {
   }
 
   Future<void> saveConfig(LanSyncConfig cfg) async {
-    final oldToken = await repo.getSetting('lan_sync_token');
-    final oldHost = await repo.getSetting('lan_sync_host');
-    final normalizedOldHost = oldHost.trim().isEmpty
-        ? ''
-        : LanSyncConfig(baseUrl: oldHost).normalizedBase;
-    final sameHost =
-        normalizedOldHost.isNotEmpty && normalizedOldHost == cfg.normalizedBase;
-    if (oldToken.isNotEmpty && oldToken != cfg.token && !sameHost) {
-      throw StateError('已有门店数据，请先同步并备份后再切换门店');
-    }
-    await repo.setSetting('lan_sync_host', cfg.normalizedBase);
-    await repo.setSetting('lan_sync_token', cfg.token);
-    await repo.setSetting('lan_sync_name', cfg.name);
+    final db = await _db.db;
+    await db.transaction((txn) async {
+      final rows = await txn.query(
+        'settings',
+        where: "key IN ('lan_sync_host','lan_sync_token')",
+      );
+      final values = {for (final row in rows) row['key']: row['value']};
+      final oldToken = values['lan_sync_token'] as String? ?? '';
+      final oldHost = values['lan_sync_host'] as String? ?? '';
+      final normalizedOldHost = oldHost.trim().isEmpty
+          ? ''
+          : LanSyncConfig(baseUrl: oldHost).normalizedBase;
+      final sameHost =
+          normalizedOldHost.isNotEmpty &&
+          normalizedOldHost == cfg.normalizedBase;
+      if (oldToken.isNotEmpty && oldToken != cfg.token && !sameHost) {
+        throw StateError('已有门店数据，请先同步并备份后再切换门店');
+      }
+      for (final entry in {
+        'lan_sync_host': cfg.normalizedBase,
+        'lan_sync_token': cfg.token,
+        'lan_sync_name': cfg.name,
+      }.entries) {
+        await txn.insert('settings', {
+          'key': entry.key,
+          'value': entry.value,
+        }, conflictAlgorithm: ConflictAlgorithm.replace);
+      }
+    });
   }
 
   Future<LanSyncConfig?> loadConfig() async {
-    final host = await repo.getSetting('lan_sync_host');
+    final db = await _db.db;
+    final rows = await db.query(
+      'settings',
+      where: "key IN ('lan_sync_host','lan_sync_token','lan_sync_name')",
+    );
+    final values = {for (final row in rows) row['key']: row['value']};
+    final host = values['lan_sync_host'] as String? ?? '';
     if (host.trim().isEmpty) return null;
     return LanSyncConfig(
       baseUrl: host,
-      token: await repo.getSetting('lan_sync_token'),
-      name: await repo.getSetting('lan_sync_name', fallback: 'CNKH-PC'),
+      token: values['lan_sync_token'] as String? ?? '',
+      name: values['lan_sync_name'] as String? ?? 'CNKH-PC',
     );
   }
 
@@ -579,18 +623,18 @@ class LanSyncClient {
       }
       final responses = await Future.wait<http.Response>(requests);
 
-      final pBody =
-          jsonDecode(utf8.decode(responses[0].bodyBytes))
-              as Map<String, dynamic>;
-      final cBody =
-          jsonDecode(utf8.decode(responses[1].bodyBytes))
-              as Map<String, dynamic>;
-      final sBody =
-          jsonDecode(utf8.decode(responses[2].bodyBytes))
-              as Map<String, dynamic>;
-      final catBody =
-          jsonDecode(utf8.decode(responses[3].bodyBytes))
-              as Map<String, dynamic>;
+      final pBody = jsonDecode(
+        utf8.decode(responses[0].bodyBytes),
+      ) as Map<String, dynamic>;
+      final cBody = jsonDecode(
+        utf8.decode(responses[1].bodyBytes),
+      ) as Map<String, dynamic>;
+      final sBody = jsonDecode(
+        utf8.decode(responses[2].bodyBytes),
+      ) as Map<String, dynamic>;
+      final catBody = jsonDecode(
+        utf8.decode(responses[3].bodyBytes),
+      ) as Map<String, dynamic>;
       if (pBody['ok'] != true) throw StateError('products: ${pBody['error']}');
       if (cBody['ok'] != true) throw StateError('customers: ${cBody['error']}');
       if (sBody['ok'] != true) throw StateError('suppliers: ${sBody['error']}');
@@ -655,7 +699,7 @@ class LanSyncClient {
                     ) ??
                     0) >
                 0) {
-          throw StateError('本地有新操作，将在下一轮同步');
+          throw _CatalogSyncDeferred();
         }
         if (fullStockMoves && stockBody != null) {
           // The host cursor may have rolled back with a restored database.
@@ -1511,8 +1555,7 @@ class LanSyncClient {
           if (canonicalReceipt != m['receipt_no']?.toString()) {
             await txn.delete(
               'sales',
-              where:
-                  "receipt_no=? AND id<>? AND synced_at IS NOT NULL AND synced_at<>''",
+              where: "receipt_no=? AND id<>? AND synced_at IS NOT NULL AND synced_at<>''",
               whereArgs: [canonicalReceipt, id],
             );
             // Sale reversal locates the original stock deductions by receipt.
@@ -1557,7 +1600,22 @@ class LanSyncClient {
       final body =
           jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
       if (body['ok'] != true) throw StateError('${body['error']}');
-      final items = (body['items'] as List?) ?? [];
+      // This endpoint returns one complete snapshot. Never reconcile absence
+      // from a malformed or partial response (including a paginated response
+      // from a future host), since that would silently void valid sales.
+      if (body['items'] is! List || body['has_more'] == true) {
+        throw const FormatException('销售响应不完整，销售记录未变更');
+      }
+      final items = body['items'] as List;
+      final receipts = <String>{};
+      for (final raw in items) {
+        if (raw is! Map ||
+            raw['receipt_no'] is! String ||
+            (raw['receipt_no'] as String).isEmpty ||
+            !receipts.add(raw['receipt_no'] as String)) {
+          throw const FormatException('销售收据号缺失或重复，销售记录未变更');
+        }
+      }
       final d = await _db.db;
       var changed = 0;
 
@@ -1572,6 +1630,19 @@ class LanSyncClient {
             whereArgs: [receipt],
             limit: 1,
           );
+          // Apply this guard to tombstones as well as live rows. A pending
+          // local sale/void must not be overwritten by the host's older state.
+          if (existing.isNotEmpty &&
+              ((existing.first['synced_at'] as String? ?? '').isEmpty ||
+                  (await txn.query(
+                    'sync_outbox',
+                    where:
+                        "kind IN ('sale_upload','sale_void') AND entity_id=?",
+                    whereArgs: [existing.first['id']],
+                    limit: 1,
+                  )).isNotEmpty)) {
+            continue;
+          }
           final deleted = (m['is_deleted'] as num?)?.toInt() ?? 0;
           final isTombstone =
               m['sold_at'] == null || m['sold_at'].toString().isEmpty;
@@ -1592,18 +1663,6 @@ class LanSyncClient {
             continue;
           }
 
-          if (existing.isNotEmpty &&
-              (existing.first['synced_at'] as String? ?? '').isEmpty) {
-            continue;
-          }
-          if (existing.isNotEmpty &&
-              (await txn.query(
-                'sync_outbox',
-                where: "kind='sale_void' AND entity_id=?",
-                whereArgs: [existing.first['id']],
-              )).isNotEmpty) {
-            continue;
-          }
           final remoteCustomer = m['customer_id'];
           var customerId = await mappedLocalId(txn, 'customer', remoteCustomer);
           if (customerId == null && remoteCustomer != null) {
@@ -1677,12 +1736,38 @@ class LanSyncClient {
           }
           changed++;
         }
+        if (since.isEmpty) {
+          final cached = await txn.rawQuery('''
+            SELECT s.id, s.receipt_no FROM sales s
+            WHERE COALESCE(s.synced_at,'')<>'' AND s.voided=0
+              AND NOT EXISTS (SELECT 1 FROM sync_outbox o
+                WHERE o.entity_id=s.id AND o.kind IN ('sale_upload','sale_void'))
+          ''');
+          for (final sale in cached) {
+            if (receipts.contains(sale['receipt_no'])) continue;
+            // Keep the historical receipt, but exclude sales absent from the
+            // restored authoritative host from turnover and credit balances.
+            await txn.update(
+              'sales',
+              {
+                'voided': 1,
+                'void_note': '电脑完整销售快照中已不存在此记录',
+                'synced_at': DateTime.now().toIso8601String(),
+              },
+              where: 'id=?',
+              whereArgs: [sale['id']],
+            );
+            changed++;
+          }
+        }
+        // Cursor and reconciled rows commit together. A failed write cannot
+        // acknowledge a snapshot whose contents were rolled back.
+        await txn.insert('settings', {
+          'key': 'lan_sync_sales_cursor',
+          'value': _nextCursor(since, <Map<String, dynamic>>[body], items),
+        }, conflictAlgorithm: ConflictAlgorithm.replace);
       });
 
-      final nextCursor = _nextCursor(since, <Map<String, dynamic>>[
-        body,
-      ], items);
-      await repo.setSetting('lan_sync_sales_cursor', nextCursor);
       await repo.setSetting('lan_sync_last_error', '');
       return 'Pulled $changed sales';
     } catch (e) {
@@ -1795,15 +1880,18 @@ class LanLiveSync {
   }
 
   Future<void> _pollOnce() async {
-    final c = _cfg;
-    if (c == null) return;
+    // A queued timer callback must not reconnect after logout/disconnect.
+    if (_cfg == null) return;
     if (_syncing) {
       _rerun = true;
       return;
     }
     _syncing = true;
-    final generation = _generation;
+    var generation = _generation;
     try {
+      final c = await _reloadConfig();
+      generation = _generation;
+      if (c == null) return;
       await client.synchronize(c);
       if (generation != _generation) return;
       connected = true;
@@ -1839,13 +1927,47 @@ class LanLiveSync {
   }
 
   Future<String> forceReconcile() async {
-    final c = _cfg ?? await client.loadConfig();
+    final c = await _reloadConfig();
     if (c == null) throw StateError('not paired');
+    final generation = _generation;
     final r = await client.forceReconcile(c);
+    if (generation != _generation) return r;
     connected = true;
+    await _openWebSocket();
     await _emitStatus();
     onRemoteChange?.call();
     return r;
+  }
+
+  Future<LanSyncConfig?> _reloadConfig() async {
+    final generation = _generation;
+    final saved = await client.loadConfig();
+    if (generation != _generation) return null;
+    if (_cfg?.normalizedBase != saved?.normalizedBase ||
+        _cfg?.token != saved?.token) {
+      // Settings uses its own client. Reload from the shared database before
+      // every request, and retire a WebSocket authenticated with the old token.
+      _generation++;
+      final currentGeneration = _generation;
+      _cfg = saved;
+      connected = false;
+      await _closeWebSocket();
+      if (currentGeneration != _generation) return null;
+    } else {
+      _cfg = saved;
+    }
+    return saved;
+  }
+
+  Future<void> _closeWebSocket() async {
+    final subscription = _wsSub;
+    final socket = _ws;
+    _wsSub = null;
+    _ws = null;
+    await subscription?.cancel();
+    try {
+      await socket?.sink.close();
+    } catch (_) {}
   }
 
   Future<void> disconnect() async {
@@ -1853,14 +1975,9 @@ class LanLiveSync {
     _rerun = false;
     _poll?.cancel();
     _poll = null;
-    await _wsSub?.cancel();
-    _wsSub = null;
-    try {
-      await _ws?.sink.close();
-    } catch (_) {}
-    _ws = null;
     _cfg = null;
     connected = false;
+    await _closeWebSocket();
     await _emitStatus();
   }
 }
