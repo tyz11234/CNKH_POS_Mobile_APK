@@ -6,9 +6,17 @@
 
 > README 最后更新：**2026-10-08**。默认源码与发布分支：main。
 
+## Mobile 1.10.11+39 — 首个固定证书签名版本
+
+**首次正式签名版本：** Mobile 1.10.11+39，新证书身份；原有 [1.10.10+38 Debug Release](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/tag/v1.10.10-mobile) 完整保留，不覆盖、不重新命名。
+
+- [GitHub 1.10.11 Mobile 正式签名发布页](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases/tag/v1.10.11-mobile)（是否已正式发布及安装包 SHA-256，请以 Release 页面实时显示为准；流水线未完成时该链接可能尚不存在）
+- 本次仅更新 Mobile 签名和版本号；Flutter 页面与业务代码未修改，SQLite schema v10、LAN `cnkh-sync:v1` 不变。Desktop 仍为 1.10.10+38。
+- **首次换签不可覆盖旧 Debug 包。** 如有收银数据，请先完成可恢复的全量备份及实测迁移；未验证前不要卸载旧 App。
+
 ## Android 正式签名：固定 Keystore 与升级安全说明（2026-10-08）
 
-> **当前下载页的 v1.10.10+38 APK 仍为 Debug 签名。** 本节记录的是加入源码的正式签名配置及独立验证工作流，**不代表新的正式签名 APK 已通过 CI、已发布或已完成真机升级验收**。请勿将历史 Debug 包误认为已切换签名。
+> **历史 v1.10.10+38 APK 仍为 Debug 签名。** v1.10.11+39 是另一个独立的固定证书签名版本；是否成功发布、能否安装及升级，应分别查看 Release 页面、CI 和实机结果。严禁误把旧 Debug 包当作正式签名。
 
 - 正式签名身份使用固定的 CNKH POS Mobile 密钥；证书 SHA-256 为 `6A:BA:50:A8:9D:F9:52:C1:7A:82:1C:7C:F5:6D:86:1D:6C:22:72:CD:A9:55:5C:E7:65:23:32:92:1A:84:99:C7`（证书指纹可以公开，私钥不能公开）。
 - `android/app/build.gradle.kts` 的 Release 构建必须通过 `CNKH_ANDROID_KEYSTORE_PATH`、`CNKH_ANDROID_KEYSTORE_PASSWORD`、`CNKH_ANDROID_KEY_ALIAS`、`CNKH_ANDROID_KEY_PASSWORD` 提供密钥；**不再允许 Release 自动回退为 Debug 签名**。
