@@ -8,7 +8,21 @@ class LoginScreen extends StatefulWidget {
   final ValueChanged<AppUser> onLoggedIn;
   final PosRepository repo;
 
-  const LoginScreen({super.key, required this.onLoggedIn,required this.repo});
+  /// When set (web role gate), the role is locked to this value: the
+  /// role switcher is hidden and the username is prefilled for the role.
+  final AppRole? fixedRole;
+
+  /// Shown next to the locked role so the user can go back to the
+  /// role picker (web role gate).
+  final VoidCallback? onChangeRole;
+
+  const LoginScreen({
+    super.key,
+    required this.onLoggedIn,
+    required this.repo,
+    this.fixedRole,
+    this.onChangeRole,
+  });
 
   @override
   State<LoginScreen> createState() => _LoginScreenState();
@@ -20,6 +34,16 @@ class _LoginScreenState extends State<LoginScreen> {
   AppRole _role = AppRole.staff;
   bool _busy = false;
   String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    final fixed = widget.fixedRole;
+    if (fixed != null) {
+      _role = fixed;
+      _userCtrl.text = fixed == AppRole.admin ? 'admin' : 'staff';
+    }
+  }
 
   @override
   void dispose() {
@@ -141,22 +165,50 @@ class _LoginScreenState extends State<LoginScreen> {
                               style: Theme.of(context).textTheme.titleSmall,
                             ),
                             const SizedBox(height: 8),
-                            SegmentedButton<AppRole>(
-                              segments: const [
-                                ButtonSegment<AppRole>(
-                                  value: AppRole.admin,
-                                  label: Text('管理员 Admin'),
-                                  icon: Icon(Icons.admin_panel_settings_outlined),
-                                ),
-                                ButtonSegment<AppRole>(
-                                  value: AppRole.staff,
-                                  label: Text('员工 Staff'),
-                                  icon: Icon(Icons.badge_outlined),
-                                ),
-                              ],
-                              selected: {_role},
-                              onSelectionChanged: _onRoleChanged,
-                            ),
+                            if (widget.fixedRole == null)
+                              SegmentedButton<AppRole>(
+                                segments: const [
+                                  ButtonSegment<AppRole>(
+                                    value: AppRole.admin,
+                                    label: Text('管理员 Admin'),
+                                    icon: Icon(Icons.admin_panel_settings_outlined),
+                                  ),
+                                  ButtonSegment<AppRole>(
+                                    value: AppRole.staff,
+                                    label: Text('员工 Staff'),
+                                    icon: Icon(Icons.badge_outlined),
+                                  ),
+                                ],
+                                selected: {_role},
+                                onSelectionChanged: _onRoleChanged,
+                              )
+                            else
+                              Row(
+                                children: [
+                                  Icon(
+                                    _role == AppRole.admin
+                                        ? Icons.admin_panel_settings_outlined
+                                        : Icons.badge_outlined,
+                                    color: CnkhColors.primary,
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Text(
+                                    _role == AppRole.admin
+                                        ? '管理员 Admin'
+                                        : '员工 Staff',
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.w700,
+                                      fontSize: 15,
+                                    ),
+                                  ),
+                                  const Spacer(),
+                                  if (widget.onChangeRole != null)
+                                    TextButton(
+                                      onPressed: widget.onChangeRole,
+                                      child: const Text('更换角色'),
+                                    ),
+                                ],
+                              ),
                             const SizedBox(height: 18),
                             TextField(
                               controller: _userCtrl,
