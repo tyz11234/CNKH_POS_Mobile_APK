@@ -8,6 +8,7 @@ import 'screens/admin/admin_hub.dart';
 import 'screens/cart_screen.dart';
 import 'screens/checkout_screen.dart';
 import 'screens/login_screen.dart';
+import 'screens/web_role_gate.dart';
 import 'screens/sales_list_screen.dart';
 import 'screens/settings_screen.dart';
 import 'services/pos_repository.dart';
@@ -67,7 +68,7 @@ class _RootState extends State<_Root> {
   Widget build(BuildContext context) {
     final user = _user;
     if (user == null) {
-      return LoginScreen(
+      return WebRoleGate(
         repo: _repo,
         onLoggedIn: (u) => setState(() => _user = u),
       );
