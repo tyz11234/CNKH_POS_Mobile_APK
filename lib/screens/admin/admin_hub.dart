@@ -6,6 +6,7 @@ import '../../theme/cnkh_theme.dart';
 import '../sales_list_screen.dart';
 import 'admin_hub_legacy.dart' as legacy;
 import 'enhanced_purchases_page.dart';
+import 'payment_records_page.dart';
 import 'entities_page.dart';
 import 'products_admin.dart';
 
@@ -58,6 +59,11 @@ class AdminHub extends StatelessWidget {
             ),
           ),
         ),
+      ),
+      _Tile(
+        '收款记录 Payments',
+        Icons.payments_outlined,
+        () => _open(context, PaymentRecordsPage(repo: repo)),
       ),
       _Tile(
         '客户 Customers',
