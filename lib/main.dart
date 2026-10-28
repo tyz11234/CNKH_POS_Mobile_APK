@@ -196,6 +196,7 @@ class _HomeShellState extends State<HomeShell> {
   @override
   void dispose() {
     PaymentBroadcastListener.instance.removeListener(_onPaymentBroadcast);
+    unawaited(PaymentBroadcastListener.instance.stop());
     _holdPoll?.cancel();
     _live.disconnect();
     super.dispose();
