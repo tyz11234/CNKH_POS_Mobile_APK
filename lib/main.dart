@@ -158,6 +158,30 @@ class _HomeShellState extends State<HomeShell> {
         _pending = pending;
       });
     };
+    _live.onServerWipeDetected = () {
+      if (!mounted) return;
+      showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) => AlertDialog(
+          title: const Text('服务器数据已被清空'),
+          content: const Text(
+            '检测到服务器执行了开业清零。为避免本机的旧测试数据回流，'
+            '同步已暂停。请到「设置 → 危险区域」执行一次「初始化 / 清空全部数据」，'
+            '然后重新登录，即可恢复同步。',
+          ),
+          actions: [
+            FilledButton(
+              onPressed: () {
+                Navigator.pop(ctx);
+                setState(() => _tab = 3);
+              },
+              child: const Text('前往设置'),
+            ),
+          ],
+        ),
+      );
+    };
     _tryAutoConnect();
     _refreshOverdueHolds();
     // poll held-order age every 60s
